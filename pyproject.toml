@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hwpxkit"
+version = "0.1.0"
+description = "Author, edit and verify Korean HWPX submission documents (사업계획서, 공문, 양식)"
+readme = "SKILL.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Siu Beom" }]
+keywords = ["hwpx", "hwp", "hancom", "korean", "document", "사업계획서"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Natural Language :: Korean",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Office Suites",
+]
+
+# Core is deliberately thin, and every entry here is permissively licensed.
+# Adding a dependency to this list is a licensing decision, not just a
+# packaging one -- see NOTICE and CONTRIBUTING.md.
+dependencies = [
+    "python-hwpx>=5.0.1",   # Apache-2.0
+]
+
+[project.optional-dependencies]
+# NONCOMMERCIAL + AGPL. Never add these to `dependencies`. pyhwpxlib is
+# PolyForm Noncommercial (no sublicensing) and pymupdf is AGPL-3.0 with a
+# network clause; either one makes a hosted or commercial build unlicensed.
+preview = [
+    "pyhwpxlib>=0.18.3",    # PolyForm Noncommercial 1.0.0
+    "wasmtime>=47.0",       # Apache-2.0 WITH LLVM-exception
+    "pymupdf>=1.28",        # AGPL-3.0 or Artifex commercial
+]
+# HWP(구 바이너리) -> HWPX 변환. 이것도 NONCOMMERCIAL 이다.
+# pyhwpxlib 안의 hwp2hwpx.py 는 Apache-2.0 이지만, 실행하려면 같은 패키지의
+# PolyForm 모듈이 필요하다 (측정: 로드되는 59개 모듈 중 56개). 자세한 내용은
+# hwpxkit/convert.py 참고.
+hwp = [
+    "pyhwpxlib>=0.18.3",    # PolyForm Noncommercial 1.0.0
+    "olefile>=0.47",        # BSD-2-Clause
+]
+# Faster XML. Optional because python-hwpx falls back to stdlib ElementTree.
+fast = ["lxml>=4.9"]
+# Real aspect ratios for inserted images; without it BoxDoc.picture assumes 3:4.
+images = ["pillow>=9.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["hwpxkit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["hwpxkit", "examples", "references", "scripts", "SKILL.md",
+           "README.md", "CONTRIBUTING.md", "LICENSE", "NOTICE"]

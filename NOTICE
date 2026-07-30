@@ -1,0 +1,103 @@
+hwpxkit
+Copyright 2026 Siu Beom
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product depends on the following third-party components. Licences were
+read from the installed distributions, not from documentation.
+
+--------------------------------------------------------------------------------
+WHAT EACH INSTALL PROFILE IS CLEARED FOR
+--------------------------------------------------------------------------------
+
+                                     core        [preview]
+  Author / edit / structural checks  yes         yes
+  Render pass in verify()            NOT VERIFIED  yes
+  PNG previews (render_pages)        RendererUnavailable  yes
+  Heaviest licence in the tree       Apache-2.0  PolyForm NC + AGPL
+  Host it as a service               yes         NO
+  Ship it in a commercial product    yes         NO
+  Open-source it permissively        yes         NO
+
+The split is enforced, not advisory: hwpxkit/render.py is the only module that
+imports the restricted packages, and verify.check_render imports it lazily. In
+the core profile they are never loaded, linked, or distributed. Check it:
+
+    python -c "import hwpxkit, sys; print([m for m in sys.modules if 'pyhwpx' in m])"
+    # core profile prints []
+
+--------------------------------------------------------------------------------
+CORE PROFILE  (pip install hwpxkit)
+--------------------------------------------------------------------------------
+
+1. python-hwpx 5.0.1  (https://github.com/airmang/python-hwpx)
+   Copyright (c) 2025-2026 airmang (Kyuhyun Ko)
+   Licensed under the Apache License, Version 2.0
+   Use: the underlying HWPX document model that hwpxkit builds on.
+
+2. lxml (optional, auto-detected)
+   Licensed under the BSD 3-Clause License
+
+Nothing in this profile restricts commercial use, hosting, or redistribution.
+
+--------------------------------------------------------------------------------
+PREVIEW / HWP PROFILES  ([preview], [hwp])  -- NONCOMMERCIAL
+--------------------------------------------------------------------------------
+
+Note on hwp2hwpx: within pyhwpxlib, the files hwp2hwpx.py, hwp_reader.py and
+value_convertor.py are Apache-2.0 (ported from neolord0/hwp2hwpx and
+neolord0/hwplib). That does NOT make the conversion feature commercially
+usable: running one conversion loads 59 pyhwpxlib modules, 56 of them PolyForm
+(.api, .builder, .writer.*, .objects.*). The Apache licence covers those three
+source files, not the working feature. For commercial conversion, use the
+upstream Apache project directly rather than this path.
+
+
+3. pyhwpxlib 0.18.3  (https://github.com/ratiertm/hwpx-skill)
+   Copyright (c) 2026 Eunmi Lee (ratiertm)
+   Licensed under PolyForm Noncommercial License 1.0.0, EXCEPT for
+   hwp2hwpx.py, hwp_reader.py and value_convertor.py, which are Apache-2.0.
+   Use: the Python bridge to the rhwp WebAssembly renderer.
+
+   PolyForm Noncommercial permits personal, academic, and nonprofit use. It
+   does NOT permit commercial use, and its "No Other Rights" clause forbids
+   sublicensing -- so this dependency's rights cannot be passed downstream by
+   hwpxkit's Apache-2.0 licence. Anyone installing this extra takes the licence
+   directly from its author. Commercial licensing: ratiertm@gmail.com
+
+4. rhwp 0.6.0, rhwp_bg.wasm  (https://github.com/edwardkim/rhwp)
+   Copyright (c) 2025-2026 Edward Kim
+   Licensed under the MIT License
+   Use: HWP/HWPX to SVG rendering. Redistributed unmodified by pyhwpxlib.
+
+   NOTE: the renderer binary itself is MIT and carries no restriction. Only the
+   Python bridge in (3) is noncommercial. A commercial build may drive this
+   wasm directly, written against its exported interface.
+
+5. NanumGothic  (bundled by pyhwpxlib)
+   Licensed under the SIL Open Font License 1.1
+
+6. wasmtime 47.0.1
+   Licensed under Apache-2.0 WITH LLVM-exception
+   Use: the WebAssembly runtime pyhwpxlib executes rhwp_bg.wasm on.
+
+7. olefile 0.47
+   Licensed under the BSD 2-Clause License
+   Use: reading the OLE compound-document container of HWP 5.x files.
+
+8. PyMuPDF (pymupdf) 1.28.0
+   "Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License"
+   Use: SVG to PNG rasterisation in hwpxkit.render.render_pages().
+
+   NOTE: this is AGPL, and it is a second, independent reason not to host the
+   preview profile. AGPL section 13 reaches users interacting over a network,
+   so a hosted service linking it must offer its own complete source to those
+   users, or hold a commercial licence from Artifex. It is imported inside
+   render_pages() only -- never by the core profile, and not even by the render
+   pass used in verify().
+
+--------------------------------------------------------------------------------
+
+Importing hwpxkit.render is the only way any component below the CORE heading
+enters the process. See the 라이선스 section of README.md for what each profile
+is cleared for, and CONTRIBUTING.md for the rule that keeps the boundary intact.
