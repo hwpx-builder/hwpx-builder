@@ -37,9 +37,7 @@ SB,SR 드림
 
 | 연구 보고서 | 비교 보고서 |
 |:---:|:---:|
-| <img width="707" height="667" alt="image" src="https://github.com/user-attachments/assets/836713e7-3ccf-4173-9e15-741effc02819" />
-| <img width="770" height="637" alt="image" src="https://github.com/user-attachments/assets/25dccef6-eba7-4b28-bebf-d5c1af548aec" />
- |
+| <img width="380" alt="image" src="https://github.com/user-attachments/assets/836713e7-3ccf-4173-9e15-741effc02819" /> | <img width="380" alt="image" src="https://github.com/user-attachments/assets/25dccef6-eba7-4b28-bebf-d5c1af548aec" /> |
 | `examples/build_research_report.py` | `examples/build_comparison_report.py` |
 
 회색 라벨 행이 있는 박스, 중첩 표, 한/영 병기 제목, `□ · ❶ ▪ ※` 마커, 굵게와
