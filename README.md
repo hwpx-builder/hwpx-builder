@@ -81,8 +81,23 @@ git clone --depth 1 https://github.com/hwpx-builder/hwpx-builder.git \
   .claude/skills/hwpx-builder
 rm -rf .claude/skills/hwpx-builder/.git
 
-pip install ./.claude/skills/hwpx-builder
+pip install ./.claude/skills/hwpx-builder             # 기본
+pip install "./.claude/skills/hwpx-builder[preview]"  # + PNG 미리보기
+pip install "./.claude/skills/hwpx-builder[hwp]"      # + 구식 .hwp 변환
 ```
+
+> 대괄호가 들어간 경로는 **따옴표로 감싸야 한다.** 셸이 `[preview]`를 파일명
+> 패턴으로 해석하기 때문이다. zsh(맥 기본 셸)는 `no matches found`로 바로
+> 실패하고, bash는 대개 그냥 넘어가지만 옆에 우연히 맞는 파일명이 있으면 경로를
+> 말없이 바꿔 버린다. 따옴표를 붙이면 둘 다 해결된다.
+
+**부가 설치 두 개는 맥과 리눅스에서도 그대로 된다.** 미리보기와 `.hwp` 변환에
+한글(HWP 프로그램)이 필요하지 않기 때문이다 — 렌더링은 WASM으로, 변환은 순수
+파이썬으로 돌아간다. 애플 실리콘과 Linux aarch64용 휠도 모두 있다.
+
+윈도우에서만 되는 것은 검증 항목 하나뿐이다. 한글 COM으로 픽셀 단위를 대조하는
+검사인데, 이건 애초에 한글 2014 이상이 깔린 윈도우에서만 켜지고 그 외에는
+`NOT VERIFIED`로 표시된다. 나머지 검사는 어느 운영체제에서나 동일하게 돌아간다.
 
 모든 프로젝트에서 공용으로 쓰려면 `~/.claude/skills/hwpx-builder`
 (윈도우는 `$HOME\.claude\skills\hwpx-builder`)에 내려받고 그 경로로 설치한다.
