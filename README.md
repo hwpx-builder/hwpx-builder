@@ -45,8 +45,8 @@ SB,SR 드림
 
 ### 결과물 직접 열어보기
 
-이미지 말고 진짜 파일을 한글에서 열어 보는 쪽이 빠르다. 아래 세 개는 위 예제
-스크립트가 만든 결과물 그대로다.
+진짜 파일 여기서 한글로 열어볼 수 있어요. 아래 세 개는 위 예제
+스크립트가 만든 결과물을 그대로 썼어요!
 
 | 내려받기 | 내용 | 만든 스크립트 |
 |---|---|---|
@@ -54,7 +54,7 @@ SB,SR 드림
 | [**비교 보고서**](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/comparison_report.hwpx) | 사진 2장, 중첩 표 | `examples/build_comparison_report.py` |
 | [**채운 사업계획서 양식**](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/startup_plan_filled.hwpx) | 배포된 `.hwp` 양식을 변환해서 채운 것 | `examples/fill_form.py` |
 
-세 파일 모두 내용은 가상이다. 직접 다시 만들려면 [예제](#예제)를 돌리면 된다.
+세 파일 모두 내용은 가상이다. 직접 다시 만들려면 [예제](#예제)를 돌리면 됩니다~
 
 ---
 
