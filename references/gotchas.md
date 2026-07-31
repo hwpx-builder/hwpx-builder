@@ -274,3 +274,35 @@ installed, so build new elements with `parent.makeelement(...)`, not
 오인하기 쉽다. 실측: 양식 본문 문단의 `margin/left` 가 2000 HWPUNIT(약 7 mm)
 이라 표가 그만큼 밀려 있었다. 새로 만든 문서에서는 앵커 `paraPr` 이 기본값
 (여백 없음)이라 이 증상이 나타나지 않는다 — **양식을 채울 때만** 보인다.
+
+---
+
+## Pictures in an edited document
+
+✅ **A text rewrite leaves the pictures behind, and every check still passes.**
+`replace_text(doc, "강아지", "햄스터")` rewrote 14 paragraphs including the caption
+`[그림 1] 햄스터`, but the frame above it still held `dog.jpg`. Structural
+verification was fully green: zip integrity, markpen pairing, binary refs, cell
+overflow, layout cache, edit scope. Nothing in the file is malformed — the
+document is just wrong. `stale_pictures(doc, subjects=[...])` reports captions
+that name a new subject so a human can decide; it never picks a replacement,
+because the document cannot know which photo is right.
+
+✅ **Swapping the bytes alone distorts the image.** Eight geometry values inside
+`<hp:pic>` must agree: `orgSz`, `curSz`, `sz`, the four `imgRect` points,
+`imgClip`, `imgDim`, and the `rotationInfo` centre. They encode the *old* aspect
+ratio. dog.jpg is 1400×933 (1.50) and hamster.jpg is 1400×1088 (1.29), so reusing
+the frame squashes the new photo. `replace_picture()` builds a correct `<hp:pic>`
+via `add_picture()` and transplants the element instead of patching the eight
+values by hand.
+
+✅ **The replaced image stays in the container.** Dropping the reference does not
+remove `BinData/BIN0001.jpg`; it sat unreferenced at 197 KB in the saved file.
+HWPX is a ZIP, so anyone who unpacks the document still sees the photo that was
+replaced. For a document you send to someone that is a disclosure, not bloat.
+`drop_orphan_images()` collects refs across **all** sections before deleting —
+scanning one section would delete an image another still uses.
+
+📋 **`<hc:img>`, not `<hp:img>`.** The picture element is `hp:` but its image
+reference is `hc:`, the same trap as `<hh:margin>` holding `<hc:left>`. Searching
+the wrong namespace returns `None` with no error.

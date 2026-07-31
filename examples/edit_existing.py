@@ -31,12 +31,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hwpx.document import HwpxDocument
 
-from hwpxkit import (find_cells, find_label, has_merged_cells, highlight_cell,
-                     refit_cell, replace_text, set_cell, verify)
+from hwpxkit import (drop_orphan_images, find_cells, find_label,
+                     has_merged_cells, highlight_cell, refit_cell,
+                     replace_picture, replace_text, set_cell, stale_pictures,
+                     verify)
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SRC = ROOT / "out" / "comparison_report.hwpx"
 DEFAULT_DEST = ROOT / "out" / "comparison_report_edited.hwpx"
+HAMSTER = ROOT / "examples" / "images" / "hamster.jpg"
 
 
 def main(src: str, dest: str) -> int:
@@ -63,7 +66,26 @@ def main(src: str, dest: str) -> int:
     # 2. Replace a phrase everywhere -- cells and markpen tails included.
     print(replace_text(doc, "강아지", "햄스터").render())
 
-    # 3. Highlight an existing phrase with a real markpen (not cell shading).
+    # 3. Swap the photo the rewrite just invalidated.
+    #    글자만 바꾸면 캡션은 "햄스터" 가 되는데 사진은 강아지 그대로 남는다.
+    #    검사는 전부 통과하지만 눈으로 보면 완전히 틀린 문서다. 자동으로 고를 수
+    #    없으니 stale_pictures 가 후보를 보여 주고, 무엇을 넣을지는 사람이 정한다.
+    for pic in stale_pictures(doc, subjects=["햄스터"]):
+        if HAMSTER.exists():
+            w, h = replace_picture(doc, pic, HAMSTER)
+            print(f"replaced picture #{pic.index} ({pic.caption[:20]}...) -> "
+                  f"hamster.jpg, {w}x{h} HWPUNIT")
+        else:
+            # 없는 사진을 지어내지 않는다. 틀린 이미지는 빈칸보다 나쁘다.
+            print(f"picture #{pic.index} still shows the old subject; "
+                  f"missing {HAMSTER.name}")
+
+    #    바뀐 사진의 바이트는 컨테이너에 그대로 남는다. HWPX 는 ZIP 이라
+    #    압축을 풀면 나온다. 보내는 문서라면 지워야 한다.
+    for name in drop_orphan_images(doc):
+        print(f"dropped orphaned image: {name}")
+
+    # 4. Highlight an existing phrase with a real markpen (not cell shading).
     for ref in find_cells(doc, "수직 동선")[:1]:
         n = highlight_cell(doc, ref.cell, "수직 동선")
         print(f"highlighted {n} occurrence(s) in {ref.path}"
@@ -73,7 +95,7 @@ def main(src: str, dest: str) -> int:
     doc.save_to_path(dest)
     print(f"saved: {dest}")
 
-    # 4. Verify against the file we started from. Without `baseline` the stale
+    # 5. Verify against the file we started from. Without `baseline` the stale
     #    layout cache check cannot run -- it needs the before-and-after pair.
     report = verify(dest, baseline=src, render=False)
     print(report.render())

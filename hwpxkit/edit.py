@@ -36,8 +36,12 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterator, Sequence
 
 from .richtext import HP, YELLOW, Span, parse_markup, paragraph_text, run_text
+from .units import HWP_PER_MM as MM
 
 HH = "{http://www.hancom.co.kr/hwpml/2011/head}"
+#: ``<hp:margin>`` 의 자식이 ``hc:`` 인 것처럼, ``<hp:pic>`` 안의 이미지 참조도
+#: ``hc:img`` 다. 네임스페이스를 잘못 골라 찾으면 오류 없이 ``None`` 만 나온다.
+HC = "{http://www.hancom.co.kr/hwpml/2011/core}"
 
 #: 스타일 변형을 파생할 때 "같은 계열"인지 판별하는 속성들.
 #: ``ensure_run_style(base_char_pr_id=...)`` 는 기준 스타일을 무시한다. charPr
@@ -848,6 +852,194 @@ def _has_markpen(run_element) -> bool:
 
 
 # -------------------------------------------------------------- 높이 맞춤 --
+
+# ---------------------------------------------------------------- 이미지 --
+
+@dataclass
+class PictureRef:
+    """문서 안 그림 하나. *paragraph* 는 그림을 붙들고 있는 문단이다."""
+    index: int
+    section: int
+    paragraph: object
+    run: object
+    element: object
+
+    @property
+    def binary_id(self) -> str | None:
+        img = self.element.find(f"{HC}img")
+        return None if img is None else img.get("binaryItemIDRef")
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """HWPUNIT 단위의 (폭, 높이). 배치된 크기이지 원본 화소가 아니다."""
+        sz = self.element.find(f"{HP}sz")
+        if sz is None:
+            return (0, 0)
+        return (int(sz.get("width", "0")), int(sz.get("height", "0")))
+
+    @property
+    def caption(self) -> str:
+        """그림 **다음** 문단의 글. 이 빌더가 캡션을 놓는 자리다.
+
+        캡션은 그림의 자식이 아니라 뒤따르는 별개의 문단이다. 그래서 글자만
+        바꾸는 편집이 캡션을 고쳐도 그림은 그대로 남는다 —
+        :func:`stale_pictures` 가 잡아내려는 바로 그 상황이다.
+        """
+        return _next_paragraph_text(self.paragraph)
+
+
+def iter_pictures(doc, *, section: int | None = None) -> Iterator[PictureRef]:
+    """문서의 모든 그림을 나오는 순서대로 넘겨준다.
+
+    표 안에 들어 있는 그림도 포함한다. ``doc.paragraphs`` 는 표 안으로 들어가지
+    않으므로 여기서는 요소 트리를 직접 훑는다.
+    """
+    counter = 0
+    for si, sec in enumerate(doc.sections):
+        if section is not None and si != section:
+            continue
+        for para in _all_paragraphs(sec):
+            for run in para.runs:
+                for child in run.element:
+                    if child.tag == f"{HP}pic":
+                        yield PictureRef(counter, si, para, run, child)
+                        counter += 1
+
+
+def replace_picture(doc, ref: PictureRef, image_path, *,
+                    width_mm: float | None = None,
+                    keep_width: bool = True) -> tuple[int, int]:
+    """그림의 내용을 다른 이미지로 바꾼다. 새 (폭, 높이) 를 돌려준다.
+
+    **기하값을 손으로 고치지 않는다.** ``<hp:pic>`` 안에는 서로 맞아야 하는
+    크기 값이 여덟 군데 있다(``orgSz`` ``curSz`` ``sz`` ``imgRect`` 네 점
+    ``imgClip`` ``imgDim`` ``rotationInfo`` 의 중심점). 하나라도 어긋나면 한글은
+    그림을 늘리거나 잘라서 그린다. 그래서 :meth:`add_picture` 로 **새 그림을
+    제대로 만들게 한 뒤 그 요소를 통째로 끼워 넣고**, 만들면서 생긴 빈 문단을
+    치운다.
+
+    높이는 새 이미지의 실제 종횡비로 다시 계산한다. 바이트만 갈아 끼우면 폭과
+    높이는 옛 사진의 비율 그대로라, 종횡비가 다른 사진은 눌리거나 늘어난다.
+
+    *keep_width* 가 참이면 원래 배치 폭을 유지한다(기본값). 문단 안에서 그림만
+    폭이 달라지면 눈에 띄기 때문이다. *width_mm* 을 주면 그 값이 우선한다.
+    """
+    from pathlib import Path
+
+    from .boxdoc import _aspect_ratio
+
+    path = Path(image_path)
+    data = path.read_bytes()
+    fmt = path.suffix.lstrip(".").lower() or "png"
+
+    if width_mm is None:
+        old_w, _ = ref.size
+        width_mm = (old_w / MM) if (keep_width and old_w) else 100.0
+    height_mm = width_mm * _aspect_ratio(data, path)
+
+    # add_picture 는 섹션 끝에 새 문단을 만들어 거기에 그림을 넣는다. 우리는
+    # 그 그림 요소만 쓰고 문단은 버린다.
+    section = doc.sections[ref.section]
+    doc.add_picture(data, fmt, section=section,
+                    width_mm=width_mm, height_mm=height_mm, align="CENTER")
+    made_para = list(section.paragraphs)[-1]
+    made_pic = None
+    for run in made_para.runs:
+        for child in run.element:
+            if child.tag == f"{HP}pic":
+                made_pic = child
+    if made_pic is None:                    # add_picture 가 모양을 바꾼 경우
+        raise RuntimeError("add_picture 가 <hp:pic> 을 만들지 않았다")
+
+    made_pic.getparent().remove(made_pic)
+    old = ref.element
+    parent = old.getparent()
+    made_pic.tail = old.tail
+    parent.replace(old, made_pic)
+    made_para.element.getparent().remove(made_para.element)
+
+    ref.element = made_pic
+    drop_layout_cache(ref.paragraph)        # 그림 크기가 바뀌면 줄 배치도 바뀐다
+    return (int(width_mm * MM), int(height_mm * MM))
+
+
+def drop_orphan_images(doc) -> list[str]:
+    """어떤 그림도 가리키지 않는 ``BinData`` 항목을 지운다. 지운 이름들을 돌려준다.
+
+    :func:`replace_picture` 는 옛 이미지의 참조만 끊는다. 바이트는 컨테이너에
+    그대로 남는다. HWPX 는 ZIP 이므로 **압축을 풀면 바뀌기 전 사진이 그대로
+    나온다.** 다른 사람에게 보내는 문서라면 그건 용량 문제가 아니라 정보가
+    새는 문제다.
+
+    참조는 모든 섹션에서 모아서 판단한다. 한 섹션만 보고 지우면 다른 섹션이
+    쓰던 이미지를 지워 그림이 깨진다.
+    """
+    used = set()
+    for si in range(len(doc.sections)):
+        for ref in iter_pictures(doc, section=si):
+            if ref.binary_id:
+                used.add(ref.binary_id)
+
+    pkg = doc.package
+    removed = []
+    for name in list(pkg.part_names()):
+        if not name.startswith("BinData/"):
+            continue
+        stem = name.split("/")[-1].rsplit(".", 1)[0]
+        if stem in used:
+            continue
+        pkg.delete(name)
+        pkg.remove_manifest_item(name)
+        removed.append(name)
+    return removed
+
+
+def stale_pictures(doc, *, subjects: Sequence[str]) -> list[PictureRef]:
+    """캡션이 *subjects* 중 하나를 말하는데 그림은 그대로인 것들을 찾는다.
+
+    글자만 바꾸는 편집의 조용한 실패를 잡는다. :func:`replace_text` 로 문서의
+    주제를 바꾸면 캡션은 새 낱말을 갖게 되지만 그림 바이트는 손대지 않은
+    그대로다. 결과는 강아지 사진 밑에 "햄스터" 라고 적힌 문서다 — 검사는 전부
+    통과하는데 눈으로 보면 완전히 틀린 문서.
+
+    자동으로 고칠 방법은 없다. 어떤 사진이 맞는지는 문서가 알지 못한다. 그래서
+    바꿔야 할 후보를 돌려주기만 한다. :func:`replace_picture` 로 무엇을 넣을지는
+    사람이 정한다.
+    """
+    hits = []
+    for ref in iter_pictures(doc):
+        caption = ref.caption
+        if any(s in caption for s in subjects):
+            hits.append(ref)
+    return hits
+
+
+def _all_paragraphs(container) -> Iterator:
+    """표 안까지 포함해서 문단을 전부 넘겨준다.
+
+    :func:`iter_tables` 를 쓰지 않는다. 그건 중첩된 표까지 한 번에 펼쳐 주는데,
+    여기서는 셀 안으로 직접 재귀하므로 중첩 표를 두 번 방문하게 된다.
+    """
+    for para in getattr(container, "paragraphs", []) or []:
+        yield para
+        for table in getattr(para, "tables", []) or []:
+            for row in table.rows:
+                for cell in row.cells:
+                    yield from _all_paragraphs(cell)
+
+
+def _next_paragraph_text(paragraph) -> str:
+    element = paragraph.element
+    parent = element.getparent()
+    if parent is None:
+        return ""
+    kids = list(parent)
+    i = kids.index(element)
+    for sib in kids[i + 1:]:
+        if sib.tag == f"{HP}p":
+            return "".join(sib.itertext()).strip()
+    return ""
+
 
 def has_merged_cells(table) -> bool:
     """한 셀이라도 여러 행 또는 여러 열에 걸쳐 있는지.

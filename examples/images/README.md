@@ -8,9 +8,14 @@
 |---|---|---|---|
 | `dog.jpg` | [Portrait of a labrador retriever](https://commons.wikimedia.org/wiki/File:Portrait_of_a_labrador_retriever.jpg) (Wikimedia Commons) | CC0 1.0 | Dktue |
 | `cat.jpg` | [Tabby cat with blue eyes](https://commons.wikimedia.org/wiki/File:Tabby_cat_with_blue_eyes-3336579.jpg) (Wikimedia Commons) | CC0 1.0 | AdinaVoicu |
+| `hamster.jpg` | [Hamster in the yard](https://commons.wikimedia.org/wiki/File:Hamster_in_the_yard.jpg) (Wikimedia Commons) | CC0 1.0 | Kanashimi |
 
-원본은 각각 6240×4160, 2877×3456 이었다. 저장소에 넣기 위해 긴 변 1400 px 로
-줄이고 JPEG 품질 82 로 다시 저장했다(합계 10.7 MB → 363 KB). 문서에는 폭
+`hamster.jpg` 는 `edit_existing.py` 가 쓴다. 그 예제는 강아지/고양이 보고서를
+햄스터/고양이로 고치는데, 글자만 바꾸면 강아지 사진 밑에 "햄스터" 라고 적힌
+문서가 나온다. 사진도 같이 바꿔야 편집이 끝난다.
+
+원본은 각각 6240×4160, 2877×3456, 3097×2407 이었다. 저장소에 넣기 위해 긴 변 1400 px 로
+줄이고 JPEG 품질 82 로 다시 저장했다(합계 13.2 MB → 619 KB). 문서에는 폭
 100 mm 로 들어가므로 이 해상도면 충분하다.
 
 두 파일 중 하나라도 없으면 예제는 사진을 지어내지 않고 눈에 보이는
