@@ -28,6 +28,7 @@ SB,SR 드림
 - [라이선스](#라이선스)
 - [이 도구의 범위](#이-도구의-범위)
 - [예제](#예제)
+- [다른 AI 에이전트에서 쓰기](#다른-ai-에이전트에서-쓰기)
 
 ---
 
@@ -386,6 +387,24 @@ python examples/edit_existing.py              # 만든 문서를 다시 편집
 
 각 예제 맨 앞에는 **그 문서를 만들 때 Claude에게 준 지시**가 적혀 있다. 스킬로
 쓸 때 그대로 복사해서 쓰면 된다.
+
+## 다른 AI 에이전트에서 쓰기
+
+이 저장소는 Claude Code 스킬로 시작했지만, 지침은 에이전트 중립적으로 두었다.
+
+- **Claude Code** — 저장소를 열면 `.claude/skills/hwpx-builder/` 를 스킬로
+  읽는다 (`scripts/sync_skill.sh` 로 갱신).
+- **GPT(Codex) · Gemini · Grok · Laguna · Solar** — 에이전트 표준인
+  [AGENTS.md](AGENTS.md) 에 준비·핵심 API·규칙 요약이 있고,
+  `GEMINI.md` / `GROK.md` / `LAGUNA.md` / `SOLAR.md` 는 각 플랫폼이 자기
+  이름의 파일을 찾을 때를 위한 포인터다. 내용은 전부 AGENTS.md → SKILL.md
+  한 곳으로 모인다 — 사본을 두면 처음 고칠 때 바로 어긋나기 때문이다.
+- **`.skill` 단일 파일** — `scripts/package_skill.sh` 가
+  `dist/hwpx-builder.skill` (SKILL.md 가 루트에 오는 zip, 약 1MB)을 만든다.
+  스킬 업로드를 지원하는 환경에 파일 하나로 설치할 수 있고, zip 으로 풀면
+  코드·예제·패치까지 그대로 나온다.
+
+---
 
 ## 문서
 
