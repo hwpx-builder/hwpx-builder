@@ -19,6 +19,7 @@ from .boxdoc import (
     table_height,
 )
 from .convert import hwp_to_hwpx, is_hwp, open_any
+from .gapfit import GapReport, analyze_gaps, fit_pictures
 from .hwp_export import (
     ExportReport,
     HwpExportError,
@@ -70,14 +71,15 @@ from .verify import Report, verify
 
 __all__ = [
     "A4_HEIGHT", "A4_WIDTH", "BODY_PT", "BoxDoc", "CellRef", "EditReport",
-    "ExportReport", "Grid", "HEADING_PT", "HwpExportError", "MARKERS", "PictureRef", "Report", "Span",
+    "ExportReport", "GapReport", "Grid", "HEADING_PT", "HwpExportError", "MARKERS", "PictureRef", "Report", "Span",
     "TITLE_PT", "YELLOW",
     "apply_markpen", "autofit", "body_width", "cached_line_count", "cell_text",
     "derive_char_pr", "dominant_font_pt", "drop_layout_cache",
     "drop_orphan_images", "find_cells", "find_label",
     "clear_guidance", "fill_cell", "flatten_indent", "has_merged_cells",
     "highlight_cell",
-    "find_converter_jar", "hancom_opens_hwpx", "hancom_version",
+    "analyze_gaps", "find_converter_jar", "fit_pictures",
+    "hancom_opens_hwpx", "hancom_version",
     "hwp_to_hwpx", "inch", "is_hwp", "make_splittable",
     "iter_cells", "iter_pictures", "iter_tables", "open_any",
     "mm", "paragraph_text", "parse_markup", "pt", "refit_cell",

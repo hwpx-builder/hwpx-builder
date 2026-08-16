@@ -154,6 +154,46 @@ refuses to resize a merged table.
 
 ## Images
 
+✅ **Without Pillow every picture silently becomes 4:3 — distortion and
+phantom margins.** `BoxDoc.picture` derives display height from the real image
+aspect via Pillow, and falls back to 3:4 when it is missing (`images` extra).
+The failure is invisible at build time: a landscape 3:2 dog photo and a
+portrait 5:6 cat photo both got identical 4:3 frames, so Hangul showed the dog
+with blank bands inside its frame and the two "same-size" pictures looked
+wildly different. If sample pictures look distorted or letterboxed, check
+`python -c "import PIL"` in the venv that built them before debugging XML.
+
+✅ **Balance comparison pictures by height, not width.** A landscape and a
+portrait photo given the same `width_mm` differ almost 2× in displayed area.
+Side-by-side subjects read as equals only when their *heights* match — pick
+each `width_mm` as `target_height_mm / (img_h/img_w)`. `gapfit` groups a
+comparison series by width **or** height matching within tolerance, so
+height-balanced pairs still shrink together.
+
+✅ **A picture taller than the remaining page space leaves a page-bottom gap.**
+Pictures cannot split at a page boundary the way cell-split tables do: Hangul
+pushes the whole object to the next page and the previous page keeps the
+leftover space as blank. `gapfit.fit_pictures` simulates the layout
+arithmetically (calibrated `form_fit.measure` line counts + declared
+table/picture heights) and shrinks only pictures whose push-gap exceeds the
+threshold (default 12% of body height), keeping aspect and never going below
+55% of the original — a too-small picture is worse than the gap. Pictures with
+the same original width form a comparison series and are always scaled
+together by one factor: shrinking only the pushed one leaves siblings visibly
+mismatched, which readers notice before they notice the gap. If the group
+cannot fit above the floor, nobody shrinks. It rescales
+display size only (`sz`/`curSz`/`imgRect`); `orgSz`/`imgDim`/`imgClip` live in
+original-image space and touching them corrupts the crop after `.hwp` export.
+
+✅ **python-hwpx saves by patching: mutate an element directly and the change
+is silently discarded.** Untouched parts are rewritten from their original
+bytes, so an edit made straight on `section.element` (bypassing python-hwpx's
+own mutating APIs) never reaches the file — the saved copy still shows the old
+values while the in-memory tree shows the new ones, which is maximally
+confusing. Call `section.mark_dirty()` after any direct element mutation;
+every function in `hwpxkit.edit` and `gapfit` does.
+
+
 ✅ **The "six geometry values" worry is overstated.** `python-hwpx`'s
 `_create_picture_element()` writes `sz`/`orgSz`/`curSz`/`imgRect`/`imgClip`/
 `imgDim` as the **same HWPUNIT value**, and those files open in real Hancom

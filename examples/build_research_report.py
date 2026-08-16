@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 
 from hwpx.document import HwpxDocument
 
-from hwpxkit import BoxDoc, Grid, verify
+from hwpxkit import BoxDoc, Grid, fit_pictures, verify
 
 IMAGES = ROOT / "examples" / "images"
 FIG1 = IMAGES / "fig1_bill.png"
@@ -271,6 +271,12 @@ def main() -> int:
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     path = build(out)
     print(f"saved: {path}")
+
+    # 사진이 남은 공간보다 커서 다음 쪽으로 밀리면 이전 쪽에 큰 공백이 남는다.
+    # 임계치를 넘는 공백을 만드는 사진만 비율 유지로 축소한다.
+    gaps = fit_pictures(path)
+    if gaps.adjusted:
+        print(f"사진 공백 조정: {gaps.adjusted}장 축소")
     print()
     print(verify(path, min_pages=1).render())
     return 0

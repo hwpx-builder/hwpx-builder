@@ -57,6 +57,7 @@ ordinary paragraphs. Build with that vocabulary:
 | `set_repeat_header(table, header_rows=1)` | same flag on any top-level table built another way |
 | `make_splittable(table)` | anchors a table in body flow (자리 차지) so pages can split it — the builders above already apply it; call it yourself only on tables built another way. A 글자처럼-취급 table never splits, whatever `pageBreak` says |
 | `b.picture(path)` / `b.image_placeholder(msg)` | images |
+| `fit_pictures(path)` / `analyze_gaps(path)` | post-build pass: a picture taller than the space left on its page gets pushed whole to the next page, leaving a large gap — this simulates layout arithmetically and shrinks the offending pictures (aspect kept, never below 55%; display size only, orgSz/imgDim/imgClip untouched). Pictures sharing the same original width — a comparison series — are grouped and always scaled together by the same factor, so side-by-side pictures never end up mismatched |
 
 ```python
 import sys; sys.path.insert(0, "<skill dir>")

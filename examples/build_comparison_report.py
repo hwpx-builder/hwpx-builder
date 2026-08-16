@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from hwpx.document import HwpxDocument
 
-from hwpxkit import BoxDoc, Grid, verify
+from hwpxkit import BoxDoc, Grid, fit_pictures, verify
 
 IMAGES = ROOT / "examples" / "images"
 DOG_IMG = IMAGES / "dog.jpg"
@@ -65,9 +65,12 @@ def build(out_path: str) -> str:
 
     # ------------------------------------------------- 1. 두 후보 소개 --
     b.section_heading("1. 두 후보 / The Two Candidates")
+    # 비교 사진은 폭이 아니라 **높이**를 맞춰야 나란히 놓았을 때 균형이 맞는다.
+    # dog.jpg 는 가로형(0.67), cat.jpg 는 세로형(1.20)이라 같은 폭이면 고양이가
+    # 두 배 가까이 커 보인다. 둘 다 높이 약 70mm 가 되도록 폭을 정한다.
     _figure(b, DOG_IMG,
             "[그림 1] 강아지 — 사람을 향해 열려 있는 동물",
-            "강아지 사진 (examples/images/dog.jpg)")
+            "강아지 사진 (examples/images/dog.jpg)", width_mm=105)
     b.paragraph(
         "강아지는 **무리 생활**에서 온 동물이다. 사람을 무리의 일원으로 받아들이고, "
         "함께 걷고 함께 먹는 일과에서 안정감을 얻는다. "
@@ -75,7 +78,7 @@ def build(out_path: str) -> str:
     b.spacer()
     _figure(b, CAT_IMG,
             "[그림 2] 고양이 — 자기 영역 안에서 사람을 허락하는 동물",
-            "고양이 사진 (examples/images/cat.jpg)")
+            "고양이 사진 (examples/images/cat.jpg)", width_mm=58)
     b.paragraph(
         "고양이는 **단독 생활**에서 온 동물이다. 관계보다 영역이 먼저이고, "
         "사람은 그 영역 안에서 허락된 존재가 된다. "
@@ -223,6 +226,11 @@ def main() -> int:
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     path = build(out)
     print(f"saved: {path}")
+
+    # 사진 밀림 공백 검사·조정 (임계치 초과 공백을 만드는 사진만 축소)
+    gaps = fit_pictures(path)
+    if gaps.adjusted:
+        print(f"사진 공백 조정: {gaps.adjusted}장 축소")
     print()
     report = verify(path, min_pages=1)
     print(report.render())
