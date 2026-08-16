@@ -96,6 +96,7 @@ class BoxDoc:
             self._fill_cell(table, row, 0, label, bold=True, shade=GREY_HEADER)
             self._fill_cell(table, row, 1, value)
         autofit(table)
+        make_splittable(table)
         return table
 
     def container_box(self, blocks: Sequence[tuple[str, Sequence]]):
@@ -112,6 +113,7 @@ class BoxDoc:
             self._fill_cell(table, i * 2, 0, label, bold=True, shade=GREY_HEADER)
             self._fill_content(table, i * 2 + 1, 0, content)
         autofit(table)
+        make_splittable(table)
         return table
 
     def _fill_content(self, table, row: int, col: int, content: Sequence) -> None:
@@ -143,8 +145,13 @@ class BoxDoc:
 
     def content_table(self, headers: Sequence[str], rows: Sequence[Sequence[str]],
                       ratios: Sequence[float] | None = None,
-                      width: int | None = None):
-        """머리글 행에 음영이 들어간 colCnt>=3 격자 (재무·일정·비교표 등)."""
+                      width: int | None = None,
+                      repeat_header: bool = False):
+        """머리글 행에 음영이 들어간 colCnt>=3 격자 (재무·일정·비교표 등).
+
+        쪽을 넘길 만큼 긴 표라면 ``repeat_header=True`` 를 줘서 다음 쪽에
+        머리글 행이 다시 나오게 한다 ("제목 줄 반복").
+        """
         total = width or self.width
         ncols = len(headers)
         ratios = tuple(ratios or [1.0] * ncols)
@@ -157,6 +164,9 @@ class BoxDoc:
             for c, cell in enumerate(row):
                 self._fill_cell(table, r, c, cell)
         autofit(table)
+        make_splittable(table)
+        if repeat_header:
+            set_repeat_header(table)
         return table
 
     def bullets(self, items: Iterable[str], marker: str = "·",
@@ -224,6 +234,40 @@ def _cell_tables(cell) -> list:
     for para in cell.paragraphs:
         found.extend(getattr(para, "tables", []) or [])
     return found
+
+
+def make_splittable(table) -> None:
+    """표를 본문 흐름에 앉혀서(자리 차지) 쪽 경계에서 나뉠 수 있게 한다.
+
+    python-hwpx 는 모든 표를 ``treatAsChar="1"`` (글자처럼 취급)로 내보내는데,
+    한글은 그런 표를 하나의 거대한 "글자"로 배치하므로 ``pageBreak`` 값과
+    무관하게 쪽 경계에서 절대 나누지 않는다 — 표가 통째로 다음 쪽으로 밀리고
+    앞에 큰 공백이 남는다. 한컴이 만든 실제 양식들은 최상위 표를
+    ``treatAsChar="0"`` 으로 앉히고, 같은 문서에서 이 비트 하나만 바꿔도
+    5쪽(공백 포함)이 4쪽(흐름)이 되는 것을 실측했다.
+
+    최상위 표 전용이다. 셀 안에 중첩된 표는 인라인이 맞다.
+    """
+    pos = table.element.find(f"{HP_NS_TAG}pos")
+    if pos is not None:
+        pos.set("treatAsChar", "0")
+
+
+def set_repeat_header(table, header_rows: int = 1) -> None:
+    """첫 *header_rows* 행을 매 쪽마다 반복시킨다 ("제목 줄 반복").
+
+    한글은 플래그 두 개를 모두 요구한다: ``<hp:tbl>`` 의 ``repeatHeader="1"``
+    과 머리글 행 셀들의 ``header="1"``. 표 속성만으로는 아무 행도 반복되지
+    않는다 — 한컴 산출 실측 문서 둘 다 ``repeatHeader="1"`` 에 header 셀
+    표시가 없고, 실제로 아무것도 반복되지 않는다.
+
+    ``pageBreak="CELL"`` (기본값)인 최상위 표에서만 의미가 있다. 셀 안에
+    중첩된 표는 쪽을 넘지 않으므로 반복될 다음 쪽도 없다.
+    """
+    table.element.set("repeatHeader", "1")
+    for row in table.rows[:header_rows]:
+        for cell in row.cells:
+            cell.element.set("header", "1")
 
 
 def table_height(table) -> int:

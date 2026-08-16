@@ -129,6 +129,18 @@ width (`page − 2×margin` = 48190 for the U300 A4/20 mm layout). Use
 📋 **Nesting depth is 2 in practice.** Both samples top out there. Depth 3 is
 unattested and untested — do not emit it.
 
+✅ **`repeatHeader="1"` on `<hp:tbl>` alone repeats nothing.** Hancom repeats
+only rows whose cells carry `header="1"` — both real samples ship
+`repeatHeader="1"` with zero header cells marked, so no row repeats. Use
+`set_repeat_header(table)` (or `content_table(..., repeat_header=True)`), which
+sets both flags. Page splitting itself is separate: `pageBreak="CELL"` is the
+default but is inert while the table is 글자처럼 취급 — see the treatAsChar
+gotcha; `make_splittable()` (applied by the builders) is what actually lets
+pages break through. Generated tables already
+carry `pageBreak="CELL"` (여러 쪽 지원 — 셀 단위로 나눔), but a table nested
+inside a cell never splits, and no renderer here paginates a fresh file —
+Hancom does on open.
+
 ✅ **Real forms merge cells; the builder never does.** 26 merged cells in 온리브,
 34 in U300 (`cellSpan` up to `rowSpan="8"`). `autofit`'s "row height = max cell
 height in that row" model does not hold there: on an untouched 온리브 table it took
@@ -199,6 +211,122 @@ convention). Checked by `verify.check_package`.
 the ZIP as a text file: `SaveAs(...,"HTML")` yields `<TITLE>PK</TITLE>`,
 `PageCount` returns 3311 for a 6-page document, PDF export never completes. A
 gate built on it is a silent-pass generator. Needs Hangul 2014+.
+
+## HWPX → HWP conversion (hwp_export + hwpConverter)
+
+✅ **Detect HWPX capability from `hwp.Version`, never by opening a probe file.**
+A probe HWPX on Hangul 2010 chews the ZIP as text past any sane timeout; killing
+the stuck PowerShell leaves hwp.exe alive holding a document, and every later
+COM launch then blocks on the recovery dialog — one bad probe poisoned two
+subsequent runs. `$hwp.Version` answers instantly (`8,0,0,466` = 2010; major ≥ 9
+= 2014+ = HWPX-capable). `hwp_export._run_com` also kills any hwp.exe it
+spawned when a call times out.
+
+✅ **This COM interface has no 1-arg `Open()` overload.** PS 5.1 late binding
+fails with "인수 개수 1"; call `Open(path, "", "")` and `SaveAs(path, "HWP", "")`.
+
+✅ **Hangul 2010's HTML import assumes EUC-KR regardless of the charset meta.**
+UTF-8 HTML arrives as mojibake, and CP949 lead bytes swallow the `<` of closing
+tags, so raw `</td>` fragments leak into the document text. `hwp_export` encodes
+the HTML as CP949 with `xmlcharrefreplace` before handing it to COM — after
+that, a 162-token document round-tripped at 100% coverage.
+
+✅ **The COM routes are inherently fragile on Hangul 2010 — prefer the jar.**
+After one timed-out COM call was killed, every later COM `Open()` on this
+machine hung on files that had opened fine minutes earlier, surviving process
+kills, with no recovery `.asv` files or registry entries to clear (cause never
+found). vsdn/hwpConverter (Apache-2.0, Java, on hwplib/hwpxlib) converts
+HWPX→HWP with no Hancom at all and preserved 100% of text tokens, all tables
+as real table controls, and images as embedded pictures on both test
+documents — far better than the HTML route, which wrecks layout. Caveats: it
+writes HWP v5.1.1.0 (whether Hangul 2010 itself opens that is unverified —
+COM was wedged; check by hand), and the project is young (5 commits), so keep
+the coverage verification on.
+
+✅ **HWP binary 형광펜 = PARA_RANGE_TAG sort=2, data=24-bit BGR.** The public
+5.0 spec (표 63) defines the record but never enumerates the kind values, and
+no open-source parser (hwplib, pyhwp, hwp-rs, hwp2hwpx) maps it. Ground truth
+came from driving Hangul 2010 itself: `CreateAction("MarkPenShape")` +
+`SetItem("Color", 65535)` on a new document (COM `Open()` was wedged but
+document *creation* still worked), then decoding the saved .hwp:
+`#FFFF00` → `0x0200FFFF` (sort 2, BGR `00FFFF`). Positions are WCHAR indices
+into the full paragraph text **including 8-WCHAR extended control chars**,
+end-exclusive. Stock hwpConverter dropped markpen entirely; our patch
+(`patches/hwpconverter-fixes.patch`, applied in `ref/hwpConverter`) parses
+`hp:markpenBegin/End` inside `hp:t` and emits the range tags — 10/10 markpen
+runs survived on the 햄스터 document. Re-cloning the repo loses the patch:
+re-apply it and rebuild before trusting markpen output.
+
+✅ **A 글자처럼 취급(treatAsChar) table NEVER splits at a page boundary,
+whatever `pageBreak` says.** Hangul lays an inline table out as one giant
+"character", so `pageBreak="CELL"` is inert and the table is pushed whole to
+the next page, leaving the big gap the user kept reporting. This was the true
+root cause — the split-mode bits were a second, independent bug. Proof by
+A/B on the same converted document in Hangul 2010: flipping only the
+CTRL_HEADER treatAsChar bit took it from 5 pages (gap) to 4 (flowing).
+Hancom-authored forms and Hangul's own TableCreate both emit top-level tables
+with treatAsChar=0 (자리 차지) — but python-hwpx and pyhwpxlib both hardcode
+`treatAsChar="1"`. Fixed in two layers: `boxdoc.make_splittable()` (applied
+by every top-level builder) sets `hp:pos treatAsChar="0"` at authoring time,
+and the hwpConverter patch clears the bit for depth-1 tables whose pageBreak
+is not NONE. Nested tables stay inline — a table inside a cell genuinely
+cannot split.
+
+✅ **HWP binary table split mode: NONE=0, TABLE=1, CELL=2 — and the official
+spec's own table is wrong.** Spec 표 76 lists bits 0-1 as "0 나누지 않음 /
+1 셀 단위로 나눔 / 2 나누지 않음" (value 2 duplicated, clearly a typo).
+Reality, from the Hancom-authored 양식.hwp ↔ its own .hwpx pair: binary 2 ↔
+`pageBreak="CELL"`. hwpConverter followed the spec (CELL→1) and Hangul 2010
+then pushed every table whole onto the next page, leaving the "big gap before
+the table" the user first reported. Fixed in `parsePageBreakType`
+(NONE→0, TABLE→1, CELL→2, same patch file). When a converted table refuses to
+split across pages, read bits 0-1 of the first UINT32 of HWPTAG_TABLE (tag
+77): it must be 2.
+
+✅ **HWP binary picture crop is in image-pixel space (px × 75), not display
+space.** HWPX's `hp:imgClip` is relative to `hp:imgDim`, and python-hwpx
+writes all six geometry values as the same display HWPUNIT (28346 = 100mm).
+Copy that crop into the binary verbatim and Hangul interprets it against the
+image's *natural* size — a 1280×783px picture displayed at 28346×17340 shows
+only its top-left ~30% ("사진이 짤려 있어"). Hangul 2010 ground truth: crop
+right = 1280×75 = 96000 regardless of display size (96dpi, 1px = 75 HWPUNIT).
+Fix in the same patch: `fixPictureCropSpace` decodes the PNG/JPEG/GIF/BMP
+header for real pixel dims and rescales the crop from imgDim space; the
+display rect stays in display space.
+
+✅ **hwpConverter wrote dangling picture binItemIDs — images silently blank.**
+Its reader renumbers BinData streams sequentially from 1 (`BIN0002.png` in
+the HWPX becomes stream `BIN0001.png`, DocInfo ID 1) but the picture record
+keeps the numeric suffix of the original reference (`binaryItemIDRef=
+"BIN0002"` → binItemID 2). Hangul finds no bin item 2 and draws nothing —
+every other byte of the picture chain was correct, so text checks all pass.
+Sections parse *before* BinData extraction, so the fix is a post-pass
+(`remapPictureBinIds`, in the same patch) that maps original-name digits to
+assigned IDs, recursing into table cells. When a converted image is blank,
+diff the picture record's binItemID (offset 71 of SHAPE_COMPONENT_PICTURE)
+against the DocInfo BIN_DATA IDs first.
+
+✅ **hwpConverter's CLI never overwrites — it silently writes `name(1).hwp`.**
+`OutputNaming.unique()` uniquifies every output path, so converting onto an
+existing file leaves the old file at the requested path and the real result
+beside it. Our wrapper then "verified" the stale old file: an HTML-route .hwp
+from two days prior passed at 100% text coverage while the user opened it and
+saw wrecked tables — text coverage cannot distinguish which conversion
+produced a file. The jar output itself was geometry-perfect all along (table
+sz and cell widths byte-identical to the source HWPX, picture at its declared
+28346×17340, not its pixel size). Fix: `_export_jar_route` converts into a
+fresh empty temp dir and `shutil.move`s over dest. When diagnosing "the jar
+corrupts geometry", first confirm the file you are reading was actually
+written by the jar.
+
+✅ **Hangul 2010's HTML import silently drops base64 `data:` images** (a
+1-image document converted with zero picture controls) **but follows relative
+`<img src="BinData/…">`.** `hwp_export` therefore converts with
+`embed_images=False` and unpacks the HWPX's `BinData/` next to the HTML — the
+image then arrives as a real embedded picture. This also means the HTML must be
+opened in place (`_run_com(..., staged=True)`), not copied alone to a fresh
+temp dir, or the relative references break again.
+
 
 ✅ **`GetTextFile("TEXT","")` opens a modal dialog** (텍스트 문서 종류) that blocks
 COM until dismissed by hand. Avoid it in automation.

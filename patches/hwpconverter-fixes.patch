@@ -1,0 +1,304 @@
+diff --git a/src/kr/n/nframe/hwplib/reader/HwpxReader.java b/src/kr/n/nframe/hwplib/reader/HwpxReader.java
+index e46b003..692d07c 100644
+--- a/src/kr/n/nframe/hwplib/reader/HwpxReader.java
++++ b/src/kr/n/nframe/hwplib/reader/HwpxReader.java
+@@ -81,6 +81,13 @@ public class HwpxReader {
+             // IdMappings의 binData 개수 갱신
+             doc.idMappings.counts[0] = doc.binDataItems.size();
+ 
++            // 5. 그림 binItemId 재매핑. extractBinData 는 binDataId 를 1부터
++            //    순차 재부여하지만 parsePicture 는 원본 참조명("BIN0002")의
++            //    숫자를 그대로 쓰므로, 예컨대 유일한 이미지가 BIN0002.png 면
++            //    DocInfo 에는 ID 1 로 등록되고 그림은 ID 2 를 가리키는
++            //    dangling 참조가 되어 한/글이 그림을 그리지 않는다.
++            remapPictureBinIds(doc);
++
+         } catch (IOException e) {
+             throw e;
+         } catch (Exception e) {
+@@ -389,4 +396,127 @@ public class HwpxReader {
+         String href;
+         String mediaType;
+     }
++
++    /**
++     * 원본 참조명의 숫자("BIN0002" → 2)를 실제 할당된 binDataId 로 재매핑하고,
++     * crop 사각형을 한/글이 기대하는 좌표계로 변환한다.
++     * 표 셀 안에 중첩된 그림까지 재귀적으로 방문한다.
++     */
++    private static void remapPictureBinIds(HwpDocument doc) {
++        java.util.Map<Integer, Integer> refToId = new java.util.HashMap<>();
++        java.util.Map<Integer, BinDataItem> byId = new java.util.HashMap<>();
++        for (BinDataItem item : doc.binDataItems) {
++            byId.put(item.binDataId, item);
++            String base = item.relativePath;
++            if (base == null) continue;
++            int slash = base.lastIndexOf('/');
++            if (slash >= 0) base = base.substring(slash + 1);
++            int dot = base.lastIndexOf('.');
++            if (dot >= 0) base = base.substring(0, dot);
++            String num = base.replaceAll("[^0-9]", "");
++            if (!num.isEmpty()) {
++                try {
++                    refToId.putIfAbsent(Integer.parseInt(num), item.binDataId);
++                } catch (NumberFormatException ignored) {}
++            }
++        }
++        if (byId.isEmpty()) return;
++        for (Section sec : doc.sections) {
++            remapInParagraphs(sec.paragraphs, refToId, byId);
++        }
++    }
++
++    private static void remapInParagraphs(java.util.List<kr.n.nframe.hwplib.model.Paragraph> paragraphs,
++                                          java.util.Map<Integer, Integer> refToId,
++                                          java.util.Map<Integer, BinDataItem> byId) {
++        for (kr.n.nframe.hwplib.model.Paragraph para : paragraphs) {
++            for (kr.n.nframe.hwplib.model.Control ctrl : para.controls) {
++                if (ctrl instanceof kr.n.nframe.hwplib.model.CtrlPicture) {
++                    kr.n.nframe.hwplib.model.CtrlPicture pic =
++                            (kr.n.nframe.hwplib.model.CtrlPicture) ctrl;
++                    Integer mapped = refToId.get(pic.binItemId);
++                    if (mapped != null) {
++                        pic.binItemId = mapped;
++                    }
++                    BinDataItem item = byId.get(pic.binItemId);
++                    if (item != null && item.data != null) {
++                        fixPictureCropSpace(pic, item.data);
++                    }
++                } else if (ctrl instanceof kr.n.nframe.hwplib.model.CtrlTable) {
++                    for (kr.n.nframe.hwplib.model.TableCell cell :
++                            ((kr.n.nframe.hwplib.model.CtrlTable) ctrl).cells) {
++                        remapInParagraphs(cell.paragraphs, refToId, byId);
++                    }
++                }
++            }
++        }
++    }
++
++    /**
++     * crop(자르기) 사각형을 한/글 바이너리 좌표계로 변환한다.
++     *
++     * HWPX 의 hp:imgClip 은 hp:imgDim 공간의 좌표지만, HWP 바이너리의
++     * "자르기 한 후 사각형"은 이미지 원본 픽셀 크기(px × 75, 96dpi 기준
++     * HWPUNIT) 공간이다 — 한/글 2010 실측: 1280×783px 그림을 표시 크기와
++     * 무관하게 crop right=96000(=1280×75) 으로 기록한다. HWPX 의 imgDim 이
++     * 표시 크기와 같은 값(둘 다 28346)인 문서를 그대로 옮기면 crop 이
++     * 원본의 좌상단 ~30% 로 해석되어 "사진이 잘려" 보인다.
++     */
++    private static void fixPictureCropSpace(kr.n.nframe.hwplib.model.CtrlPicture pic, byte[] data) {
++        if (!("pic".equals(pic.shapeType) || pic.shapeType == null)) return;
++        int[] px = decodeImagePixelSize(data);
++        if (px == null || px[0] <= 0 || px[1] <= 0) return;
++        int naturalW = px[0] * 75;   // 96dpi: 1px = 7200/96 = 75 HWPUNIT
++        int naturalH = px[1] * 75;
++        int dimW = pic.imgDimWidth, dimH = pic.imgDimHeight;
++        if (dimW > 0 && dimH > 0 && (dimW != naturalW || dimH != naturalH)) {
++            pic.cropLeft   = (int) Math.round((double) pic.cropLeft   * naturalW / dimW);
++            pic.cropRight  = (int) Math.round((double) pic.cropRight  * naturalW / dimW);
++            pic.cropTop    = (int) Math.round((double) pic.cropTop    * naturalH / dimH);
++            pic.cropBottom = (int) Math.round((double) pic.cropBottom * naturalH / dimH);
++        } else if (pic.cropRight == 0 && pic.cropBottom == 0) {
++            pic.cropRight = naturalW;
++            pic.cropBottom = naturalH;
++        }
++        pic.imgDimWidth = naturalW;
++        pic.imgDimHeight = naturalH;
++    }
++
++    /**
++     * PNG / JPEG / GIF / BMP 헤더에서 픽셀 크기를 읽는다. 실패 시 null.
++     */
++    private static int[] decodeImagePixelSize(byte[] d) {
++        if (d.length >= 24 && (d[0] & 0xFF) == 0x89 && d[1] == 'P' && d[2] == 'N' && d[3] == 'G') {
++            int w = ((d[16] & 0xFF) << 24) | ((d[17] & 0xFF) << 16) | ((d[18] & 0xFF) << 8) | (d[19] & 0xFF);
++            int h = ((d[20] & 0xFF) << 24) | ((d[21] & 0xFF) << 16) | ((d[22] & 0xFF) << 8) | (d[23] & 0xFF);
++            return new int[]{w, h};
++        }
++        if (d.length >= 4 && (d[0] & 0xFF) == 0xFF && (d[1] & 0xFF) == 0xD8) { // JPEG
++            int i = 2;
++            while (i + 9 < d.length) {
++                if ((d[i] & 0xFF) != 0xFF) { i++; continue; }
++                int marker = d[i + 1] & 0xFF;
++                if (marker == 0xD8 || (marker >= 0xD0 && marker <= 0xD9)) { i += 2; continue; }
++                int len = ((d[i + 2] & 0xFF) << 8) | (d[i + 3] & 0xFF);
++                // SOF0-SOF15 (DHT/DAC/JPG 마커 제외)
++                if (marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC) {
++                    int h = ((d[i + 5] & 0xFF) << 8) | (d[i + 6] & 0xFF);
++                    int w = ((d[i + 7] & 0xFF) << 8) | (d[i + 8] & 0xFF);
++                    return new int[]{w, h};
++                }
++                i += 2 + len;
++            }
++            return null;
++        }
++        if (d.length >= 10 && d[0] == 'G' && d[1] == 'I' && d[2] == 'F') {
++            return new int[]{(d[6] & 0xFF) | ((d[7] & 0xFF) << 8),
++                             (d[8] & 0xFF) | ((d[9] & 0xFF) << 8)};
++        }
++        if (d.length >= 26 && d[0] == 'B' && d[1] == 'M') {
++            int w = (d[18] & 0xFF) | ((d[19] & 0xFF) << 8) | ((d[20] & 0xFF) << 16) | ((d[21] & 0xFF) << 24);
++            int h = (d[22] & 0xFF) | ((d[23] & 0xFF) << 8) | ((d[24] & 0xFF) << 16) | ((d[25] & 0xFF) << 24);
++            return new int[]{w, Math.abs(h)};
++        }
++        return null;
++    }
+ }
+diff --git a/src/kr/n/nframe/hwplib/reader/SectionParser.java b/src/kr/n/nframe/hwplib/reader/SectionParser.java
+index c64e516..9319afc 100644
+--- a/src/kr/n/nframe/hwplib/reader/SectionParser.java
++++ b/src/kr/n/nframe/hwplib/reader/SectionParser.java
+@@ -232,7 +232,7 @@ public class SectionParser {
+      * run 내부의 단일 항목: 텍스트 또는 컨트롤.
+      */
+     private static class RunItem {
+-        enum Type { TEXT, SECTION_DEF, COLUMN_DEF, TABLE, PICTURE, FIELD, FIELD_END, PAGE_NUM_POS, HEADER_FOOTER, TAB }
++        enum Type { TEXT, SECTION_DEF, COLUMN_DEF, TABLE, PICTURE, FIELD, FIELD_END, PAGE_NUM_POS, HEADER_FOOTER, TAB, MARKPEN_BEGIN, MARKPEN_END }
+         Type type;
+         String text;          // TEXT 타입용
+         Control control;      // 컨트롤 타입용
+@@ -241,6 +241,7 @@ public class SectionParser {
+         int tabWidth;         // TAB 타입용: HWPUNIT 단위 탭 너비
+         int tabLeader;        // TAB 타입용: leader 타입
+         int tabType;          // TAB 타입용: 탭 타입 (0=left,1=right,2=center,3=decimal)
++        int markpenColor;     // MARKPEN_BEGIN 타입용: 24-bit BGR 색상
+     }
+ 
+     /**
+@@ -389,6 +390,19 @@ public class SectionParser {
+                     item.type = RunItem.Type.TEXT;
+                     item.text = String.valueOf(CHAR_FWSPACE);
+                     ri.items.add(item);
++                } else if ("markpenBegin".equals(ln)) {
++                    // 형광펜 시작. HWP 바이너리에서는 PARA_RANGE_TAG sort=2,
++                    // data=24-bit BGR (한/글 2010 산출 파일 실측). 문자 폭 0 —
++                    // 텍스트 스트림에는 아무것도 쓰지 않고 위치만 표시한다.
++                    // 강조 텍스트는 이 요소의 형제 TEXT_NODE(.tail)로 이어진다.
++                    RunItem item = new RunItem();
++                    item.type = RunItem.Type.MARKPEN_BEGIN;
++                    item.markpenColor = parseMarkpenColor(getAttrStr(el, "color", "#FFFF00"));
++                    ri.items.add(item);
++                } else if ("markpenEnd".equals(ln)) {
++                    RunItem item = new RunItem();
++                    item.type = RunItem.Type.MARKPEN_END;
++                    ri.items.add(item);
+                 }
+             }
+         }
+@@ -571,6 +585,21 @@ public class SectionParser {
+         return idx >= 0 ? tagName.substring(idx + 1) : tagName;
+     }
+ 
++    /**
++     * HWPX 형광펜 색 "#RRGGBB" → PARA_RANGE_TAG 하위 24비트 BGR.
++     * 한/글 2010 실측: #FFFF00 (노랑) → data 0x00FFFF.
++     */
++    private static int parseMarkpenColor(String hex) {
++        try {
++            String s = hex.startsWith("#") ? hex.substring(1) : hex;
++            int rgb = Integer.parseInt(s, 16);
++            int r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
++            return (b << 16) | (g << 8) | r;
++        } catch (NumberFormatException e) {
++            return 0x00FFFF; // 기본 노랑
++        }
++    }
++
+     // ---- Text와 CharShapeRef 구성 ----
+ 
+     /**
+@@ -608,6 +637,10 @@ public class SectionParser {
+         long controlMask = 0;
+         int lastCharPrIDRef = -1; // 중복 제거를 위해 이전 run의 charPrIDRef 추적
+         int lastFieldCtrlId = 0;  // fieldEnd와 짝을 맞추기 위한 마지막으로 열린 FIELD ctrlId
++        // 형광펜: markpenBegin 위치/색을 쌓아 두었다가 markpenEnd에서
++        // PARA_RANGE_TAG(sort=2, data=BGR)로 확정 (위치 = 컨트롤 문자 포함
++        // WCHAR 인덱스, end exclusive — 한/글 2010 실측과 동일).
++        java.util.Deque<int[]> markpenStack = new java.util.ArrayDeque<>();
+ 
+         for (RunInfo ri : runs) {
+             // Fix #2: charPrIDRef가 실제로 변경된 경우에만 새 charShapeRef 항목 추가
+@@ -665,6 +698,19 @@ public class SectionParser {
+                         charPos += 8; // 8 WCHAR
+                         break;
+                     }
++                    case MARKPEN_BEGIN: {
++                        markpenStack.push(new int[]{charPos, item.markpenColor});
++                        break;
++                    }
++                    case MARKPEN_END: {
++                        if (!markpenStack.isEmpty()) {
++                            int[] mk = markpenStack.pop();
++                            if (charPos > mk[0]) {
++                                para.rangeTags.add(new ParaRangeTag(mk[0], charPos, 2, mk[1]));
++                            }
++                        }
++                        break;
++                    }
+                     case TEXT: {
+                         if (item.text != null) {
+                             for (int i = 0; i < item.text.length(); i++) {
+@@ -692,6 +738,15 @@ public class SectionParser {
+             }
+         }
+ 
++        // 짝 없는 markpenBegin: 문단 텍스트 끝에서 닫는다 (HWPX 렌더링과 동일하게
++        // "끝까지 강조"가 되며, 열린 채 버리면 형광펜이 통째로 사라진다).
++        while (!markpenStack.isEmpty()) {
++            int[] mk = markpenStack.pop();
++            if (charPos > mk[0]) {
++                para.rangeTags.add(new ParaRangeTag(mk[0], charPos, 2, mk[1]));
++            }
++        }
++
+         // 문단 끝 마커 덧붙이기 (1 WCHAR = 2 byte)
+         // Fix #1: 0x000D는 char 타입 컨트롤(1 WCHAR)이며, 확장 컨트롤이 아님.
+         // controlMask에 포함하면 안 됨. 확장 컨트롤만 controlMask 비트를 설정.
+@@ -1095,6 +1150,20 @@ public class SectionParser {
+         tbl.objProperty = buildExtendedObjProperty(tbl.objProperty, textWrap,
+                 widthBasis, heightBasis, sizeProtect, 2);
+ 
++        // 한/글은 글자처럼 취급(treatAsChar=1)된 표를 한 "글자"로 배치하므로
++        // 쪽 경계에서 나누지 못한다 — pageBreak=CELL 이어도 표가 통째로 다음
++        // 쪽으로 밀려 표 앞에 큰 공백이 남는다. (실측: treatAsChar 만 꺼도
++        // 같은 문서가 5쪽→4쪽으로 줄며 공백 소멸. 한/글 2010 이 직접 만든 표와
++        // 한컴 산출 양식의 표도 모두 treatAsChar=0.) python-hwpx 등 생성기가
++        // 표를 treatAsChar=1 로 내보내므로, 나눔이 켜진 최상위 표는 한컴과
++        // 같은 "자리 차지" 배치로 정규화한다. 중첩 표(깊이>1)는 셀 안
++        // 인라인 배치가 맞으므로 그대로 둔다.
++        boolean topLevelTable = NEST_DEPTH.get()[0] <= 1;
++        boolean wantsSplit = (tbl.property & 0x3) != 0; // 0 = 나누지 않음
++        if (topLevelTable && wantsSplit) {
++            tbl.objProperty &= ~1L; // treatAsChar 해제
++        }
++
+         // hp:outMargin
+         Element outMargin = getChildElement(tblEl, HP, "outMargin");
+         if (outMargin != null) {
+diff --git a/src/kr/n/nframe/hwplib/reader/XmlHelper.java b/src/kr/n/nframe/hwplib/reader/XmlHelper.java
+index 1118f6d..4127418 100644
+--- a/src/kr/n/nframe/hwplib/reader/XmlHelper.java
++++ b/src/kr/n/nframe/hwplib/reader/XmlHelper.java
+@@ -474,12 +474,17 @@ public final class XmlHelper {
+      *  뒤집혀 HWP↔HWPX roundtrip 시 값이 토글되는 버그가 있었다.
+      */
+     public static int parsePageBreakType(String type) {
+-        if (type == null || type.isEmpty()) return 1; // 기본값: DivideByCell (Hangul UI 기본 "셀 단위로 나눔")
++        // 공식 스펙 표 76은 "0=나누지 않음, 1=셀 단위, 2=나누지 않음"으로 값 2가
++        // 중복 표기된 오류가 있다. 실측 근거 (한컴 산출 양식.hwp ↔ 그 hwpx 페어):
++        //   binary 2 ↔ pageBreak="CELL"  — 실제 한/글에서 셀 단위로 나뉨
++        //   binary 1 을 쓰면 한/글 2010이 표를 통째로 다음 쪽으로 밀어
++        //   "표 앞에 큰 빈 공간" 증상이 남 (= HWPX "TABLE" 동작).
++        if (type == null || type.isEmpty()) return 2; // 기본값: 셀 단위로 나눔
+         switch (type) {
+-            case "NONE":   return 0;  // NoDivide   ("나누지 않음")
+-            case "CELL":   return 1;  // DivideByCell ("셀 단위로 나눔")
+-            case "TABLE":  return 2;  // Divide     ("쪽 경계에서 나눔" / "나눔")
+-            default:       return 1;
++            case "NONE":   return 0;  // 나누지 않음
++            case "TABLE":  return 1;  // 표 전체를 다음 쪽으로
++            case "CELL":   return 2;  // 셀 단위로 나눔
++            default:       return 2;
+         }
+     }
+ 

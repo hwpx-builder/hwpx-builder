@@ -19,9 +19,13 @@ WHAT EACH INSTALL PROFILE IS CLEARED FOR
   Ship it in a commercial product    yes         NO
   Open-source it permissively        yes         NO
 
-The split is enforced, not advisory: hwpxkit/render.py is the only module that
-imports the restricted packages, and verify.check_render imports it lazily. In
-the core profile they are never loaded, linked, or distributed. Check it:
+The split is enforced, not advisory: only three modules touch the restricted
+packages -- hwpxkit/render.py, hwpxkit/convert.py, and hwpxkit/hwp_export.py
+(the .hwp read-back verification and the Hangul-2010 HTML fallback) -- and
+every one imports them lazily, inside functions. In the core profile they are
+never loaded, linked, or distributed. hwp_export's preferred jar route drives
+vsdn/hwpConverter (Apache-2.0) as an external java process; nothing restricted
+is involved in the conversion itself. Check it:
 
     python -c "import hwpxkit, sys; print([m for m in sys.modules if 'pyhwpx' in m])"
     # core profile prints []

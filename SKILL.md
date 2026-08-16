@@ -53,7 +53,9 @@ ordinary paragraphs. Build with that vocabulary:
 | `b.label_value_box(pairs)` | colCnt=2, short label left, value right |
 | `b.container_box(blocks)` | colCnt=1 shell, grey label row + content row (the dominant shape) |
 | `Grid(headers, rows, ratios)` | a table nested inside a container content row |
-| `b.content_table(...)` | standalone colCnt>=3 grid |
+| `b.content_table(..., repeat_header=True)` | standalone colCnt>=3 grid; `repeat_header` re-shows the header row when the table crosses a page (제목 줄 반복) |
+| `set_repeat_header(table, header_rows=1)` | same flag on any top-level table built another way |
+| `make_splittable(table)` | anchors a table in body flow (자리 차지) so pages can split it — the builders above already apply it; call it yourself only on tables built another way. A 글자처럼-취급 table never splits, whatever `pageBreak` says |
 | `b.picture(path)` / `b.image_placeholder(msg)` | images |
 
 ```python
@@ -142,9 +144,39 @@ from hwpxkit import open_any, is_hwp, hwp_to_hwpx
 doc = open_any("form.hwp")     # .hwp 면 변환 후, .hwpx 면 그냥 열기
 ```
 
-`[hwp]` 부가 설치가 필요하다. 변환은 **단방향**이다 — HWPX → HWP 는 없다.
-`hwp2hwpx.py` 가 Apache-2.0 이라고 해서 상업적으로 쓸 수 있는 것이 아니다.
-실행하면 PolyForm 모듈 56개가 함께 로드된다. `hwpxkit/convert.py` 참고.
+`[hwp]` 부가 설치가 필요하다. `hwp2hwpx.py` 가 Apache-2.0 이라고 해서
+상업적으로 쓸 수 있는 것이 아니다. 실행하면 PolyForm 모듈 56개가 함께
+로드된다. `hwpxkit/convert.py` 참고. 반대 방향(HWPX → HWP)은 아래
+`to_hwp` 가 맡는다.
+
+## Exporting .hwp for recipients on old Hangul
+
+Hangul 2010 cannot open HWPX at all (`Open()` still returns `True` — it reads
+the ZIP as a text file). When the recipient needs binary `.hwp`:
+
+```python
+from hwpxkit import to_hwp
+print(to_hwp("사업계획서.hwpx").render())   # writes 사업계획서.hwp alongside
+```
+
+`to_hwp` tries routes in order and reports which one ran:
+
+1. **jar** — [vsdn/hwpConverter](https://github.com/vsdn/hwpConverter)
+   (Apache-2.0, Java 8+): a real HWPX→HWP writer on hwplib/hwpxlib. No
+   Hancom needed, keeps tables and images as real objects. Preferred; found
+   via `HWPCONVERTER_HOME` or `ref/hwpConverter`. Apply
+   `patches/hwpconverter-fixes.patch` to your clone and build with the three
+   javac/jar lines in its README — stock hwpConverter drops markpen, breaks
+   image references/crop, and mis-maps the table split mode.
+2. **direct** — Hangul 2014+ COM `SaveAs`.
+3. **html** — Hangul 2010 COM via CP949 HTML. Last resort: text and table
+   structure survive but layout degrades badly — avoid when the jar is
+   available.
+
+Every export is verified by re-reading the `.hwp` (`pyhwpxlib.hwp_reader` +
+`olefile`, the noncommercial `hwp` extra — see NOTICE; imports are lazy) and
+reporting token coverage; on auto, a garbage result falls through to the next
+route. Treat anything under 100% as a defect to inspect.
 
 ## Non-negotiable rules
 

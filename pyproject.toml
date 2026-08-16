@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hwpxkit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Author, edit and verify Korean HWPX submission documents (사업계획서, 공문, 양식)"
 readme = "SKILL.md"
 requires-python = ">=3.10"
@@ -36,7 +36,9 @@ preview = [
     "wasmtime>=47.0",       # Apache-2.0 WITH LLVM-exception
     "pymupdf>=1.28",        # AGPL-3.0 or Artifex commercial
 ]
-# HWP(구 바이너리) -> HWPX 변환. 이것도 NONCOMMERCIAL 이다.
+# HWP(구 바이너리) <-> HWPX 변환. 이것도 NONCOMMERCIAL 이다.
+# hwp_export.to_hwp (HWPX -> HWP) 의 jar 경로 자체는 외부 java 프로세스라
+# 제약이 없지만, 결과 검증 리드백과 한글 2010 HTML 폴백이 이 extra 를 쓴다.
 # pyhwpxlib 안의 hwp2hwpx.py 는 Apache-2.0 이지만, 실행하려면 같은 패키지의
 # PolyForm 모듈이 필요하다 (측정: 로드되는 59개 모듈 중 56개). 자세한 내용은
 # hwpxkit/convert.py 참고.
@@ -53,5 +55,5 @@ images = ["pillow>=9.0"]
 packages = ["hwpxkit"]
 
 [tool.hatch.build.targets.sdist]
-include = ["hwpxkit", "examples", "references", "scripts", "SKILL.md",
-           "README.md", "CONTRIBUTING.md", "LICENSE", "NOTICE"]
+include = ["hwpxkit", "examples", "patches", "references", "scripts",
+           "SKILL.md", "README.md", "CONTRIBUTING.md", "LICENSE", "NOTICE"]

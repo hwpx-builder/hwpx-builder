@@ -14,9 +14,19 @@ from .boxdoc import (
     BoxDoc,
     Grid,
     autofit,
+    make_splittable,
+    set_repeat_header,
     table_height,
 )
 from .convert import hwp_to_hwpx, is_hwp, open_any
+from .hwp_export import (
+    ExportReport,
+    HwpExportError,
+    find_converter_jar,
+    hancom_opens_hwpx,
+    hancom_version,
+    to_hwp,
+)
 from .edit import (
     CellRef,
     clear_guidance,
@@ -60,19 +70,20 @@ from .verify import Report, verify
 
 __all__ = [
     "A4_HEIGHT", "A4_WIDTH", "BODY_PT", "BoxDoc", "CellRef", "EditReport",
-    "Grid", "HEADING_PT", "MARKERS", "PictureRef", "Report", "Span",
+    "ExportReport", "Grid", "HEADING_PT", "HwpExportError", "MARKERS", "PictureRef", "Report", "Span",
     "TITLE_PT", "YELLOW",
     "apply_markpen", "autofit", "body_width", "cached_line_count", "cell_text",
     "derive_char_pr", "dominant_font_pt", "drop_layout_cache",
     "drop_orphan_images", "find_cells", "find_label",
     "clear_guidance", "fill_cell", "flatten_indent", "has_merged_cells",
     "highlight_cell",
-    "hwp_to_hwpx", "inch", "is_hwp",
+    "find_converter_jar", "hancom_opens_hwpx", "hancom_version",
+    "hwp_to_hwpx", "inch", "is_hwp", "make_splittable",
     "iter_cells", "iter_pictures", "iter_tables", "open_any",
     "mm", "paragraph_text", "parse_markup", "pt", "refit_cell",
     "replace_in_paragraph", "replace_picture", "replace_text",
     "set_cell", "set_paragraph", "stale_pictures",
-    "split_width", "table_height", "verify",
+    "set_repeat_header", "split_width", "table_height", "to_hwp", "verify",
     # 분석 틀 템플릿
     "budget", "business_model_canvas", "competitor_matrix", "milestones",
     "swot", "tam_sam_som",

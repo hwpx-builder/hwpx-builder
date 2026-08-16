@@ -48,13 +48,17 @@ SB,SR 드림
 진짜 파일 여기서 한글로 열어볼 수 있어요. 아래 세 개는 위 예제
 스크립트가 만든 결과물을 그대로 썼어요!
 
-| 내려받기 | 내용 | 만든 스크립트 |
-|---|---|---|
-| [**연구 보고서**](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/research_report.hwpx) | 표 6개 + 그림 2장, 5쪽 | `examples/build_research_report.py` |
-| [**비교 보고서**](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/comparison_report.hwpx) | 사진 2장, 중첩 표 | `examples/build_comparison_report.py` |
-| [**채운 사업계획서 양식**](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/startup_plan_filled.hwpx) | 배포된 `.hwp` 양식을 변환해서 채운 것 | `examples/fill_form.py` |
+| 내려받기 | 구버전 한글용 | 내용 | 만든 스크립트 |
+|---|---|---|---|
+| [**연구 보고서**](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/research_report.hwpx) | [.hwp](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/research_report.hwp) | 표 6개 + 그림 2장, 5쪽 | `examples/build_research_report.py` |
+| [**비교 보고서**](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/comparison_report.hwpx) | [.hwp](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/comparison_report.hwp) | 사진 2장, 중첩 표 | `examples/build_comparison_report.py` |
+| [**채운 사업계획서 양식**](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/startup_plan_filled.hwpx) | [.hwp](https://github.com/hwpx-builder/hwpx-builder/raw/main/docs/samples/startup_plan_filled.hwp) | 배포된 `.hwp` 양식을 변환해서 채운 것 | `examples/fill_form.py` |
 
-세 파일 모두 내용은 가상이다. 직접 다시 만들려면 [예제](#예제)를 돌리면 됩니다~
+세 파일 모두 내용은 가상이다. `.hwp` 열은 같은 문서를 `to_hwp` 로 변환한
+것으로, HWPX 를 못 여는 구버전 한글(2010 등)에서도 열린다. 표는 쪽 경계에서
+셀 단위로 나뉘고 긴 표의 머리글 행은 다음 쪽에 반복된다 — 예전 견본에서 표가
+통째로 다음 쪽에 밀리며 큰 공백이 남던 문제를 고친 결과다. 직접 다시 만들려면
+[예제](#예제)를 돌리면 됩니다~
 
 ---
 
@@ -279,9 +283,21 @@ doc = open_any("양식.hwp")     # 변환해서 바로 열기
 `mimetype`을 ZIP 첫 자리에 넣지 않아 ODF 관례를 어기는 반면, 변환기는 이를
 지키기 때문이다.
 
-**변환은 단방향이다.** HWPX → HWP 변환은 지원하지 않는다. HWP 5.x는 OLE
-바이너리라 쓰기가 읽기보다 훨씬 까다롭다. 그 방향이 필요하면 한글의 "다른
-이름으로 저장" 기능을 쓰면 된다.
+**반대 방향(HWPX → HWP)은 `to_hwp` 가 맡는다.** 받는 쪽이 HWPX 를 못 여는
+구버전 한글(2010 등)을 쓸 때를 위한 것이다.
+
+```python
+from hwpxkit import to_hwp
+
+print(to_hwp("사업계획서.hwpx").render())   # -> 사업계획서.hwp + 검증 리포트
+```
+
+경로는 셋을 순서대로 시도한다: ① [vsdn/hwpConverter](https://github.com/vsdn/hwpConverter)
+jar (Apache-2.0, Java 8+ — 한글 불필요, 표·이미지·형광펜을 실개체로 보존.
+`patches/hwpconverter-fixes.patch` 를 적용해 빌드하고 `HWPCONVERTER_HOME`
+으로 알려준다) ② 한글 2014+ COM `SaveAs` ③ 한글 2010 COM + CP949 HTML
+(최후 수단 — 레이아웃이 많이 깨진다). 변환마다 결과 .hwp 를 다시 읽어 텍스트
+토큰 보존율을 보고하며, 100% 미만은 의심하고 열어 봐야 한다.
 
 ---
 

@@ -22,10 +22,26 @@ fi
 "$PY" examples/build_comparison_report.py
 "$PY" examples/fill_form.py
 
+# .hwp 견본: hwpConverter jar 가 있으면 함께 갱신한다 (없으면 건너뜀).
+# jar 위치는 HWPCONVERTER_HOME 으로 알려준다. SKILL.md 의 내보내기 절 참고.
+"$PY" - <<'PYEOF' || echo "  (.hwp 변환 건너뜀 — hwpConverter jar 또는 [hwp] 부가 설치 없음)"
+import sys
+sys.path.insert(0, ".")
+from hwpxkit import to_hwp
+for name in ["research_report", "comparison_report", "startup_plan_filled"]:
+    r = to_hwp(f"out/{name}.hwpx", f"out/{name}.hwp")
+    assert r.coverage >= 0.999, (name, r.coverage)
+    print(f"  변환: out/{name}.hwp ({r.route}, {r.coverage:.0%})")
+PYEOF
+
 mkdir -p docs/samples
 for f in research_report comparison_report startup_plan_filled; do
     cp "out/$f.hwpx" "docs/samples/$f.hwpx"
     echo "  갱신: docs/samples/$f.hwpx"
+    if [ -f "out/$f.hwp" ]; then
+        cp "out/$f.hwp" "docs/samples/$f.hwp"
+        echo "  갱신: docs/samples/$f.hwp"
+    fi
 done
 
 echo
