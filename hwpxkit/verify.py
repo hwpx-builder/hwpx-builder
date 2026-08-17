@@ -311,6 +311,63 @@ def check_against_baseline(path: str | Path, baseline: str | Path) -> list[Check
     return out
 
 
+def check_layout(path: str | Path, *, min_pages: int = 1) -> list[CheckResult]:
+    """자체 조판 엔진(:mod:`hwpxkit.preview`)으로 배치를 검사한다.
+
+    rhwp 와 달리 lineseg 캐시를 재생하지 않고 직접 조판하므로, **캐시가 없는
+    새 문서**의 쪽수·표 분할·사진 배치를 실제로 판단할 수 있다. 실측 대조
+    (한글 2010): 쪽수는 정확 일치 또는 +1 보수. 형광펜도 이 엔진은 실제로
+    그리므로 렌더 레벨 짝 검사가 가능하다.
+
+    표준 라이브러리 + Apache-2.0 재료만 쓴다 — 어느 프로파일에서든 돈다.
+    """
+    import re as _re
+    import zipfile as _zip
+
+    from .preview import render_html
+
+    out: list[CheckResult] = []
+    try:
+        info = render_html(path, out=None)
+    except Exception as exc:
+        return [CheckResult("layout engine", False, detail=f"조판 실패: {exc}")]
+
+    out.append(CheckResult(
+        "layout renders", info["pages"] >= min_pages,
+        detail=f"{info['pages']} page(s), 자체 조판 (한컴 대비 ±1쪽 가능)"))
+    out.append(CheckResult(
+        "no empty pages", info["empty_pages"] == 0,
+        detail="all pages carry content" if not info["empty_pages"]
+        else f"{info['empty_pages']} empty page(s)"))
+    out.append(CheckResult(
+        "body width respected", not info["warnings"],
+        detail="no table exceeds the text body"
+        if not info["warnings"] else "; ".join(info["warnings"])))
+
+    gaps = [p for p in info["pictures"]
+            if p["gap_before"] > 0.12 * info["body_height"]]
+    out.append(CheckResult(
+        "picture push gaps", not gaps,
+        detail="no oversized page-bottom gaps" if not gaps
+        else f"{len(gaps)} gap(s) over 12% of body — fit_pictures() 로 조정 가능"))
+
+    # 형광펜 렌더 짝: 원본 markpenBegin 수와 렌더된 <mark 수가 같아야 한다.
+    try:
+        begins = 0
+        with _zip.ZipFile(path) as z:
+            for n in z.namelist():
+                if _re.match(r"Contents/section\d+\.xml", n):
+                    begins += z.read(n).decode("utf-8", "replace").count("markpenBegin")
+        marks = info.get("html", "").count("<mark")
+        out.append(CheckResult(
+            "highlight renders", marks == begins,
+            detail=f"{marks}/{begins} markpen run(s) drawn (자체 엔진)"))
+    except Exception as exc:
+        out.append(CheckResult("highlight renders", False, checked=False,
+                               detail=str(exc)))
+    return out
+
+
 def check_render(path: str | Path, *, min_pages: int = 1) -> list[CheckResult]:
     """rhwp 로 모든 페이지를 렌더해서 구조가 무너졌는지 본다.
 
@@ -340,16 +397,13 @@ def verify(path: str | Path, *, render: bool = True, min_pages: int = 1,
     if baseline is not None:
         report.add(*check_against_baseline(path, baseline))
     if render:
-        report.add(*check_render(path, min_pages=min_pages))
-    # 아래 항목들은 여기서 쓸 수 있는 어떤 수단으로도 확인할 수 없다. 하나씩
-    # 이름을 붙여 두면 "안 봤다"가 "보니 괜찮더라"로 읽히지 않는다.
+        report.add(*check_layout(path, min_pages=min_pages))
+    # 아래 항목은 여기서 쓸 수 있는 어떤 수단으로도 확인할 수 없다. 이름을
+    # 붙여 두면 "안 봤다"가 "보니 괜찮더라"로 읽히지 않는다. (렌더 검사는
+    # 자체 조판 엔진이 맡는다 — 예전 rhwp 기반의 NOT VERIFIED 두 줄은
+    # check_layout 의 실검사로 바뀌었다.)
     report.add(CheckResult(
-        "highlight renders", False, checked=False,
-        detail="rhwp ignores markpen entirely (A/B confirmed); XML pairing only"))
-    report.add(CheckResult(
-        "line breaking / page count", False, checked=False,
-        detail="rhwp replays cached linesegarray; a generated file has none"))
-    report.add(CheckResult(
-        "Hancom COM oracle", False, checked=False,
-        detail="requires Hangul 2014+; Hangul 2010 cannot parse HWPX"))
+        "Hancom-exact rendering", False, checked=False,
+        detail="자체 조판은 한컴과 ±1쪽·줄바꿈 차이가 있을 수 있다; "
+               "실기 확인은 한컴오피스에서"))
     return report

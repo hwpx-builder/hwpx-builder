@@ -150,6 +150,32 @@ doc = open_any("form.hwp")     # .hwp 면 변환 후, .hwpx 면 그냥 열기
 로드된다. `hwpxkit/convert.py` 참고. 반대 방향(HWPX → HWP)은 아래
 `to_hwp` 가 맡는다.
 
+## Previewing, exporting PDF, and the feedback loop
+
+`hwpxkit.preview` is a self-contained layout engine (stdlib + Apache-2.0
+`form_fit` only). Unlike rhwp it does **not** replay the lineseg cache — it
+lays the document out itself, so freshly generated files get real pagination:
+tables split at row boundaries (repeat-header drawn), pictures push with the
+gap **visible**, markpen actually renders. Measured accuracy: page counts
+match Hangul 2010 exactly or +1 conservative.
+
+```python
+from hwpxkit import render_html, render_png, render_pdf, lint
+
+render_html("doc.hwpx", "preview.html")   # self-contained, double-click to view
+render_png("doc.hwpx", "preview.png")     # one tall PNG (headless Chrome)
+render_pdf("doc.hwpx", "doc.pdf")         # vector PDF, exact paper size
+print(lint("doc.hwpx"))                    # layout smells, human sentences
+```
+
+**Work with your eyes open.** After building or editing a document, render a
+PNG and *look at it* before declaring the work done — then fix what you see
+and render again. This loop caught, in one session: tables silently 20mm into
+the right margin, orphaned grey label rows at page bottoms, and mismatched
+comparison-photo sizes. `lint()` automates the mechanical part (width
+overflow, oversized picture gaps, empty pages); your eyes catch the rest.
+PNG/PDF need a local Chrome; `render_html`/`lint` need nothing.
+
 ## Exporting .hwp for recipients on old Hangul
 
 Hangul 2010 cannot open HWPX at all (`Open()` still returns `True` — it reads
@@ -230,7 +256,8 @@ Checkable without a renderer:
 - unbreakable cell overflow, via `hwpx.form_fit.measure` (advances calibrated on
   real Hancom line caches)
 
-Checkable with rhwp: file parses, page count, non-blank pages, tables/images present.
+Checkable with the built-in layout engine (`check_layout`): page count,
+empty pages, body-width overflow, picture push gaps, markpen render pairing.
 
 Checkable only with `baseline=` (an edit against the file it started from):
 - a changed paragraph that kept its layout cache — invisible inside a single file

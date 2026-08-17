@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from hwpx.document import HwpxDocument
 
-from hwpxkit import BoxDoc, Grid, fit_pictures, verify
+from hwpxkit import BoxDoc, Grid, apply_u300_page, fit_pictures, verify
 
 IMAGES = ROOT / "examples" / "images"
 DOG_IMG = IMAGES / "dog.jpg"
@@ -41,6 +41,7 @@ def _figure(b: BoxDoc, path: Path, caption: str, missing: str,
 
 def build(out_path: str) -> str:
     doc = HwpxDocument.new()
+    apply_u300_page(doc)   # U300 양식 지오메트리 — 표 폭과 본문 폭 일치
     b = BoxDoc(doc)
 
     # ---------------------------------------------------------------- title --

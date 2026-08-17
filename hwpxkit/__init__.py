@@ -13,6 +13,7 @@ from .boxdoc import (
     TITLE_PT,
     BoxDoc,
     Grid,
+    apply_u300_page,
     autofit,
     make_splittable,
     set_repeat_header,
@@ -20,6 +21,7 @@ from .boxdoc import (
 )
 from .convert import hwp_to_hwpx, is_hwp, open_any
 from .gapfit import GapReport, analyze_gaps, fit_pictures
+from .preview import lint, render_html, render_pdf, render_png
 from .hwp_export import (
     ExportReport,
     HwpExportError,
@@ -73,7 +75,7 @@ __all__ = [
     "A4_HEIGHT", "A4_WIDTH", "BODY_PT", "BoxDoc", "CellRef", "EditReport",
     "ExportReport", "GapReport", "Grid", "HEADING_PT", "HwpExportError", "MARKERS", "PictureRef", "Report", "Span",
     "TITLE_PT", "YELLOW",
-    "apply_markpen", "autofit", "body_width", "cached_line_count", "cell_text",
+    "apply_markpen", "apply_u300_page", "autofit", "body_width", "cached_line_count", "cell_text",
     "derive_char_pr", "dominant_font_pt", "drop_layout_cache",
     "drop_orphan_images", "find_cells", "find_label",
     "clear_guidance", "fill_cell", "flatten_indent", "has_merged_cells",
@@ -83,6 +85,7 @@ __all__ = [
     "hwp_to_hwpx", "inch", "is_hwp", "make_splittable",
     "iter_cells", "iter_pictures", "iter_tables", "open_any",
     "mm", "paragraph_text", "parse_markup", "pt", "refit_cell",
+    "lint", "render_html", "render_pdf", "render_png",
     "replace_in_paragraph", "replace_picture", "replace_text",
     "set_cell", "set_paragraph", "stale_pictures",
     "set_repeat_header", "split_width", "table_height", "to_hwp", "verify",

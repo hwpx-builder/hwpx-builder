@@ -31,6 +31,8 @@ dependencies = [
 # NONCOMMERCIAL + AGPL. Never add these to `dependencies`. pyhwpxlib is
 # PolyForm Noncommercial (no sublicensing) and pymupdf is AGPL-3.0 with a
 # network clause; either one makes a hosted or commercial build unlicensed.
+# 미리보기·PDF·verify 렌더 검사는 이제 자체 엔진(hwpxkit.preview, core)이
+# 맡는다 — 이 extra 는 레거시 rhwp 캐시 재생 렌더러에만 필요하다.
 preview = [
     "pyhwpxlib>=0.18.3",    # PolyForm Noncommercial 1.0.0
     "wasmtime>=47.0",       # Apache-2.0 WITH LLVM-exception

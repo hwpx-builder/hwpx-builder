@@ -12,15 +12,21 @@ WHAT EACH INSTALL PROFILE IS CLEARED FOR
 
                                      core        [preview]
   Author / edit / structural checks  yes         yes
-  Render pass in verify()            NOT VERIFIED  yes
-  PNG previews (render_pages)        RendererUnavailable  yes
+  Layout render pass in verify()     yes (built-in engine)  yes
+  HTML preview / lint                yes         yes
+  PNG / PDF export                   yes (needs local Chrome)  yes
+  Legacy rhwp cache-replay render    RendererUnavailable  yes
   Heaviest licence in the tree       Apache-2.0  PolyForm NC + AGPL
   Host it as a service               yes         NO
   Ship it in a commercial product    yes         NO
   Open-source it permissively        yes         NO
 
-The split is enforced, not advisory: only three modules touch the restricted
-packages -- hwpxkit/render.py, hwpxkit/convert.py, and hwpxkit/hwp_export.py
+As of the built-in layout engine (hwpxkit/preview.py, stdlib + Apache-2.0
+only), the preview extra is no longer needed for previews or the verify()
+render pass -- [preview] remains only for the legacy rhwp cache-replay
+renderer. The split is enforced, not advisory: only three modules touch the
+restricted packages -- hwpxkit/render.py, hwpxkit/convert.py, and
+hwpxkit/hwp_export.py
 (the .hwp read-back verification and the Hangul-2010 HTML fallback) -- and
 every one imports them lazily, inside functions. In the core profile they are
 never loaded, linked, or distributed. hwp_export's preferred jar route drives

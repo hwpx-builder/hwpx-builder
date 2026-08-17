@@ -88,6 +88,18 @@ detects this (`tail` slot whose holder is a markpen tag) and records it in
 
 ## Layout cache (`<hp:linesegarray>`)
 
+✅ **The built-in layout engine's accuracy claims are measured, not hoped.**
+`hwpxkit.preview` lays out with calibrated `form_fit` line counts + declared
+table/picture geometry. Verified against Hangul 2010 openings: 강아지 4=4,
+제목줄반복 4=4, 온리브 6=6 pages exact; U300 +1 conservative. Two rules made
+that possible: trust the *declared* row heights of Hancom-saved documents for
+text (estimating them inflated 6-page docs to 8-10), but add cell-content
+estimates for images/nested tables, which Hancom does **not** fold into
+declared heights (a 13-image document carried two pages of pictures invisible
+to declared geometry). PDF page size must come from the document's own pagePr,
+and Chrome's @page print CSS reproduces the pagination exactly (4쪽 조판 →
+4-page A4 PDF).
+
 ✅ **rhwp largely replays this cache instead of laying out text.** Stripping every
 `linesegarray` from 온리브 changed rhwp's page count 6→5 and pushed glyphs further
 off-page. Consequence: **rhwp cannot judge line breaking or page count on a

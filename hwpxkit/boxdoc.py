@@ -57,7 +57,15 @@ class BoxDoc:
     """작성 중인 문서. A4 기준 페이지 기하를 쓴다."""
 
     doc: object
-    width: int = field(default_factory=lambda: body_width())
+    width: int = 0
+
+    def __post_init__(self):
+        # 본문 폭은 문서의 실제 페이지 여백에서 읽는다. 예전에는 U300 상수
+        # (여백 20mm 기준 48190)를 썼는데, HwpxDocument.new() 스켈레톤의
+        # 여백은 30mm(본문 42520)라 모든 표가 오른쪽 여백을 20mm 침범했다 —
+        # preview 렌더러가 발굴하기 전까지 아무 도구도 이를 보지 못했다.
+        if not self.width:
+            self.width = _doc_body_width(self.doc) or body_width()
 
     # ------------------------------------------------------------- 텍스트 --
 
@@ -234,6 +242,41 @@ def _cell_tables(cell) -> list:
     for para in cell.paragraphs:
         found.extend(getattr(para, "tables", []) or [])
     return found
+
+
+def _doc_body_width(doc) -> int | None:
+    """문서의 pagePr 에서 본문 폭(용지 - 좌우 여백)을 읽는다."""
+    for sec in getattr(doc, "sections", []):
+        for page in sec.element.iter(f"{HP_NS_TAG}pagePr"):
+            m = page.find(f"{HP_NS_TAG}margin")
+            if m is None:
+                continue
+            try:
+                return (int(page.get("width"))
+                        - int(m.get("left")) - int(m.get("right")))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def apply_u300_page(doc) -> None:
+    """U300 제출 양식의 실측 페이지 지오메트리를 적용한다.
+
+    A4 세로, 좌우 20mm(5669) · 상하/머리말/꼬리말 10mm(2834) → 본문
+    48190×72852. 공식 배포 양식(양식. 사업계획서 hwpx)의 pagePr 을 그대로
+    옮긴 값이다. BoxDoc 을 만들기 **전에** 호출해야 본문 폭이 이 여백으로
+    계산된다.
+    """
+    margins = {"left": "5669", "right": "5669", "top": "2834",
+               "bottom": "2834", "header": "2834", "footer": "2834",
+               "gutter": "0"}
+    for sec in doc.sections:
+        for page in sec.element.iter(f"{HP_NS_TAG}pagePr"):
+            m = page.find(f"{HP_NS_TAG}margin")
+            for k, v in margins.items():
+                m.set(k, v)
+        # python-hwpx 는 패치 저장 — dirty 표시 없는 직접 변형은 버려진다.
+        sec.mark_dirty()
 
 
 def make_splittable(table) -> None:
