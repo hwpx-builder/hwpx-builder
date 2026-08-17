@@ -77,7 +77,6 @@ git clone --depth 1 https://github.com/hwpx-builder/hwpx-builder.git .claude/ski
 Remove-Item -Recurse -Force .claude\skills\hwpx-builder\.git
 
 pip install ".\.claude\skills\hwpx-builder"             # 기본
-pip install ".\.claude\skills\hwpx-builder[preview]"    # + PNG 미리보기
 pip install ".\.claude\skills\hwpx-builder[hwp]"        # + 구식 .hwp 변환
 ```
 
@@ -89,11 +88,10 @@ git clone --depth 1 https://github.com/hwpx-builder/hwpx-builder.git \
 rm -rf .claude/skills/hwpx-builder/.git
 
 pip install ./.claude/skills/hwpx-builder             # 기본
-pip install "./.claude/skills/hwpx-builder[preview]"  # + PNG 미리보기
 pip install "./.claude/skills/hwpx-builder[hwp]"      # + 구식 .hwp 변환
 ```
 
-> 대괄호가 들어간 경로는 **따옴표로 감싸야 한다.** 셸이 `[preview]`를 파일명
+> 대괄호가 들어간 경로는 **따옴표로 감싸야 한다.** 셸이 `[hwp]`를 파일명
 > 패턴으로 해석하기 때문이다. zsh(맥 기본 셸)는 `no matches found`로 바로
 > 실패하고, bash는 대개 그냥 넘어가지만 옆에 우연히 맞는 파일명이 있으면 경로를
 > 말없이 바꿔 버린다. 따옴표를 붙이면 둘 다 해결된다.
@@ -360,7 +358,7 @@ jar (Apache-2.0, Java 8+ — 한글 불필요, 표·이미지·형광펜을 실�
 부가 설치 두 개는 **비상업**이다. 개인·학술 용도는 괜찮지만, 서비스로
 띄우거나 상업 제품에 넣어서는 안 된다.
 
-| | 기본 | `[preview]` / `[hwp]` |
+| | 기본 | `[hwp]` |
 |---|:---:|:---:|
 | 문서 만들기 · 편집 · 구조 검사 | ✅ | ✅ |
 | PNG 미리보기, 렌더 검사 | NOT VERIFIED로 표시 | ✅ |

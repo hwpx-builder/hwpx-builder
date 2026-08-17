@@ -1,10 +1,9 @@
-"""Render HWPX pages to PNG for visual inspection.
+"""HWPX 미리보기 내보내기 CLI — 자체 조판 엔진(hwpxkit.preview) 사용.
 
-    python scripts/render_png.py <file.hwpx> [out_dir] [--pages 0,1] [--scale 1.4]
+    python scripts/render_png.py <file.hwpx> [out.png|out.pdf|out.html]
 
-Requires the optional preview extra (``pip install 'hwpxkit[preview]'``), which
-pulls in the PolyForm-Noncommercial ``pyhwpxlib``. The rendering itself lives in
-:mod:`hwpxkit.render`; this script is only a command line around it.
+부가 설치가 필요 없다 (PNG/PDF 는 로컬 Chrome headless 실행).
+출력 경로를 생략하면 <file>_preview.png 를 만든다.
 """
 from __future__ import annotations
 
@@ -13,27 +12,24 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hwpxkit.render import RendererUnavailable, render_pages
+from hwpxkit import lint, render_html, render_pdf, render_png
 
 
 def main(argv: list[str]) -> int:
     if not argv:
         print(__doc__)
-        return 2
-    src = argv[0]
-    out_dir = argv[1] if len(argv) > 1 and not argv[1].startswith("--") else "render"
-    pages = None
-    scale = 1.4
-    for arg in argv:
-        if arg.startswith("--pages"):
-            pages = [int(x) for x in arg.split("=", 1)[1].split(",")]
-        elif arg.startswith("--scale"):
-            scale = float(arg.split("=", 1)[1])
-    try:
-        render_pages(src, out_dir, pages, scale)
-    except RendererUnavailable as exc:
-        print(exc)
         return 1
+    src = Path(argv[0])
+    out = Path(argv[1]) if len(argv) > 1 else src.with_name(src.stem + "_preview.png")
+    if out.suffix == ".html":
+        info = render_html(src, out)
+    elif out.suffix == ".pdf":
+        info = render_pdf(src, out)
+    else:
+        info = render_png(src, out)
+    print(f"{info['pages']}쪽 -> {out}")
+    for w in lint(src):
+        print(f"  린트: {w}")
     return 0
 
 

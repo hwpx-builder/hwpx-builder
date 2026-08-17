@@ -10,22 +10,22 @@ read from the installed distributions, not from documentation.
 WHAT EACH INSTALL PROFILE IS CLEARED FOR
 --------------------------------------------------------------------------------
 
-                                     core        [preview]
+                                     core        [hwp]
   Author / edit / structural checks  yes         yes
   Layout render pass in verify()     yes (built-in engine)  yes
-  HTML preview / lint                yes         yes
-  PNG / PDF export                   yes (needs local Chrome)  yes
-  Legacy rhwp cache-replay render    RendererUnavailable  yes
+  HTML preview / lint / PNG / PDF    yes (PNG/PDF need local Chrome)  yes
+  Old-binary .hwp conversion         guided exit  yes
+  to_hwp read-back verification      degraded    yes
   Heaviest licence in the tree       Apache-2.0  PolyForm NC + AGPL
   Host it as a service               yes         NO
   Ship it in a commercial product    yes         NO
   Open-source it permissively        yes         NO
 
-As of the built-in layout engine (hwpxkit/preview.py, stdlib + Apache-2.0
-only), the preview extra is no longer needed for previews or the verify()
-render pass -- [preview] remains only for the legacy rhwp cache-replay
-renderer. The split is enforced, not advisory: only three modules touch the
-restricted packages -- hwpxkit/render.py, hwpxkit/convert.py, and
+Previews, PDF export, and the verify() render pass are served by the
+built-in layout engine (hwpxkit/preview.py, stdlib + Apache-2.0 only). The
+former [preview] extra and the rhwp cache-replay renderer it powered were
+removed once the engine surpassed them. The split is enforced, not advisory:
+only two modules touch the restricted package -- hwpxkit/convert.py and
 hwpxkit/hwp_export.py
 (the .hwp read-back verification and the Hangul-2010 HTML fallback) -- and
 every one imports them lazily, inside functions. In the core profile they are
@@ -51,7 +51,7 @@ CORE PROFILE  (pip install hwpxkit)
 Nothing in this profile restricts commercial use, hosting, or redistribution.
 
 --------------------------------------------------------------------------------
-PREVIEW / HWP PROFILES  ([preview], [hwp])  -- NONCOMMERCIAL
+HWP PROFILE  ([hwp])  -- NONCOMMERCIAL
 --------------------------------------------------------------------------------
 
 Note on hwp2hwpx: within pyhwpxlib, the files hwp2hwpx.py, hwp_reader.py and
@@ -87,24 +87,10 @@ upstream Apache project directly rather than this path.
 5. NanumGothic  (bundled by pyhwpxlib)
    Licensed under the SIL Open Font License 1.1
 
-6. wasmtime 47.0.1
-   Licensed under Apache-2.0 WITH LLVM-exception
-   Use: the WebAssembly runtime pyhwpxlib executes rhwp_bg.wasm on.
-
-7. olefile 0.47
+6. olefile 0.47
    Licensed under the BSD 2-Clause License
    Use: reading the OLE compound-document container of HWP 5.x files.
 
-8. PyMuPDF (pymupdf) 1.28.0
-   "Dual Licensed - GNU AFFERO GPL 3.0 or Artifex Commercial License"
-   Use: SVG to PNG rasterisation in hwpxkit.render.render_pages().
-
-   NOTE: this is AGPL, and it is a second, independent reason not to host the
-   preview profile. AGPL section 13 reaches users interacting over a network,
-   so a hosted service linking it must offer its own complete source to those
-   users, or hold a commercial licence from Artifex. It is imported inside
-   render_pages() only -- never by the core profile, and not even by the render
-   pass used in verify().
 
 --------------------------------------------------------------------------------
 

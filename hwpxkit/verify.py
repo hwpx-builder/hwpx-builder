@@ -4,8 +4,9 @@
 
 1. **패키지 + 기하** — 렌더러 불필요, 밀리초 단위. 깨진 ZIP, 끊어진
    ``binaryItemIDRef``, 표 너비와 안 맞는 열 너비 합계를 잡는다.
-2. **rhwp 렌더** — 페이지당 약 0.1초. 무너진 표, 빈 페이지, 사라진 이미지를
-   잡는다.
+2. **자체 조판 렌더** (:mod:`hwpxkit.preview`) — 문서당 0.02~0.3초. 쪽수,
+   빈 쪽, 본문 폭 초과, 사진 밀림 공백, 형광펜 렌더 짝을 잡는다. lineseg
+   캐시를 재생하지 않고 직접 조판하므로 갓 만든 문서에도 유효하다.
 3. **한글 COM** — 픽셀 단위 결과에 대한 유일한 권위. 다만 한글 **2014 이상**이
    필요하다. 한글 2010 은 HWPX 를 아예 파싱하지 못하면서도 ``Open()`` 이
    ``True`` 를 돌려주므로 *가짜* 오라클이다. 쓰지 않는다.
@@ -20,8 +21,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 #: 예전에 이 이름을 import 하던 코드를 위해 남겨 둔다. 실제 메시지는 이제
-#: hwpxkit.render 에 있다.
-RHWP_UNAVAILABLE = "rhwp renderer unavailable (pip install 'hwpxkit[preview]')"
 
 
 @dataclass
@@ -366,19 +365,6 @@ def check_layout(path: str | Path, *, min_pages: int = 1) -> list[CheckResult]:
         out.append(CheckResult("highlight renders", False, checked=False,
                                detail=str(exc)))
     return out
-
-
-def check_render(path: str | Path, *, min_pages: int = 1) -> list[CheckResult]:
-    """rhwp 로 모든 페이지를 렌더해서 구조가 무너졌는지 본다.
-
-    :mod:`hwpxkit.render` 에 위임한다. 비상업 라이선스인 ``pyhwpxlib`` 를
-    import 해도 되는 유일한 모듈이다. 지연 import 라서 core 프로파일에서도
-    이 모듈이 — 따라서 모든 구조 검사가 — 문제없이 로드된다.
-    """
-    from .render import render_check
-
-    return [CheckResult(name, ok, checked=checked, detail=detail)
-            for name, ok, checked, detail in render_check(path, min_pages=min_pages)]
 
 
 def verify(path: str | Path, *, render: bool = True, min_pages: int = 1,

@@ -29,14 +29,15 @@ unrelated project.
 
 ```bash
 pip install <skill dir>             # core: author, edit, structural verify (Apache-2.0)
-pip install '<skill dir>[preview]'  # adds PNG previews + the render pass (NONCOMMERCIAL)
+pip install '<skill dir>[hwp]'      # + old-binary .hwp conversion (NONCOMMERCIAL)
 ```
 
-The two profiles are one codebase. Core carries no licence restriction and may
-be hosted, sold, or open-sourced; `preview` pulls in PolyForm-Noncommercial
-`pyhwpxlib` and AGPL `pymupdf` and must not be hosted. Without the extra,
-`verify()` reports the render line as NOT VERIFIED and everything else works
-unchanged. Per-profile detail is in `NOTICE`.
+The two profiles are one codebase. Core carries no licence restriction and
+may be hosted, sold, or open-sourced — previews, PDF export, and the render
+pass in `verify()` are all core (built-in layout engine). `[hwp]` pulls in
+PolyForm-Noncommercial `pyhwpxlib` for old-binary `.hwp` conversion and the
+`to_hwp` read-back verification; a hosted build must not carry it. Per-profile
+detail is in `NOTICE`.
 
 Import path: add the skill directory to `sys.path`, then `import hwpxkit`.
 
@@ -286,17 +287,15 @@ oracle needs Hangul 2014+, realistically 2020/2022.
 
 ## Rendering for a visual check
 
-Needs the `preview` extra; without it this declines with `RendererUnavailable`
-rather than a stray `ImportError`.
+No extra install — the built-in engine renders directly:
 
 ```bash
-python scripts/render_png.py out.hwpx render/ --scale=1.5
+python scripts/render_png.py out.hwpx            # -> out_preview.png (+린트)
+python scripts/render_png.py out.hwpx out.pdf    # vector PDF
 ```
 
-Then actually look at the PNG. On Windows `cairosvg` cannot be used (no
-`libcairo-2.dll`); the script goes through PyMuPDF. Font names in the SVG do not
-resolve, so every `font-family` is rewritten to a Korean-capable system font —
-which shifts glyph widths, another reason wrap positions are not authoritative.
+Then actually look at the output. PNG/PDF run a local headless Chrome;
+`render_html`/`lint` need nothing beyond the core install.
 
 ## Licence
 

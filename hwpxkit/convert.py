@@ -1,6 +1,6 @@
 """HWP(구 바이너리 포맷) → HWPX 변환.
 
-``hwpxkit.render`` 와 같은 이유로 격리된 모듈이다. 변환은 ``pyhwpxlib`` 에
+``hwpxkit.hwp_export`` 와 같은 이유로 격리된 모듈이다. 변환은 ``pyhwpxlib`` 에
 의존하는데 그 패키지가 PolyForm Noncommercial 이라, import 를 이 파일 하나에
 가둬 두어야 core 프로파일이 깨끗하게 유지된다.
 
