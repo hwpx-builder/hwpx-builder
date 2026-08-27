@@ -62,6 +62,7 @@ class CharStyle:
 class Theme:
     char: dict[str, CharStyle] = field(default_factory=dict)
     align: dict[str, str] = field(default_factory=dict)       # paraPr id -> css
+    spacing: dict[str, float] = field(default_factory=dict)   # paraPr id -> 줄간격 배수
     fill: dict[str, str] = field(default_factory=dict)        # borderFill id -> css color
     border: dict[str, dict[str, str]] = field(default_factory=dict)  # id -> side -> css
 
@@ -86,12 +87,26 @@ def _parse_theme(header_root) -> Theme:
         t.char[cid] = st
     for pp in header_root.iter(f"{_HH}paraPr"):
         pid = pp.get("id")
+        if pid is None:
+            continue
         al = pp.find(f"{_HH}align")
-        if pid is not None and al is not None:
+        if al is not None:
             t.align[pid] = {
                 "CENTER": "center", "RIGHT": "right", "JUSTIFY": "justify",
                 "DISTRIBUTE": "justify",
             }.get(al.get("horizontal", ""), "left")
+        # 줄간격. 문단마다 다를 수 있는데 예전에는 문서 전체를 160% 로 박아
+        # 두었다 — 줄간격을 바꿔도 미리보기 쪽 수가 꿈쩍하지 않았다.
+        #
+        # ``<hh:lineSpacing>`` 은 paraPr 의 **직접 자식이 아니다** — find() 로는
+        # 못 찾는다. 게다가 같은 값이 두 번 들어 있는 경우가 있어 첫 개만 쓴다.
+        for ls in pp.iter(f"{_HH}lineSpacing"):
+            if ls.get("type") == "PERCENT":
+                try:
+                    t.spacing[pid] = int(ls.get("value", "160")) / 100
+                except ValueError:
+                    pass
+            break
     for bf in header_root.iter(f"{_HH}borderFill"):
         bid = bf.get("id")
         if bid is None:
@@ -223,6 +238,8 @@ class Block:
     kind: str                    # text | table | picture
     height: int
     el: object = None
+    #: 같은 문단에 나란히 놓인 그림들 (glyph 처럼 이어 붙는다). el 이 그 첫 장.
+    siblings: list = None
 
 
 def _page_body(sec_root) -> tuple[int, int, dict[str, int]]:
@@ -244,12 +261,13 @@ def _blocks(sec_root, theme: Theme, body_w: int, imgs: dict[str, str]):
             sz = tbl.find(f"{_HP}sz")
             yield Block("table", sum(_row_heights(tbl, theme, imgs)), tbl)
         elif pic is not None:
-            sz = pic.find(f"{_HP}sz")
-            yield Block("picture", int(sz.get("height")), pic)
+            pics = list(p.iter(f"{_HP}pic"))
+            height = max(int(x.find(f"{_HP}sz").get("height")) for x in pics)
+            yield Block("picture", height, pic, pics)
         else:
             text = _para_plain(p)
             _, _, pt = _runs_to_html(p, theme)
-            pitch = int(pt * 100 * LINE_RATIO)
+            pitch = int(pt * 100 * _ratio(p, theme))
             n = estimate_lines(text, body_w, pt) if text.strip() else 1
             yield Block("text", n * pitch, p)
 
@@ -267,7 +285,9 @@ def _cell_html(tc, theme: Theme, imgs: dict[str, str]) -> str:
         if inner_tbl is not None:
             parts.append(_table_html(inner_tbl, theme, imgs, rows_slice=None))
         elif inner_pic is not None:
-            parts.append(_pic_html(inner_pic, imgs))
+            # 한 문단에 여러 장이면 글자처럼 나란히 놓인 것이다. 예전에는
+            # 첫 장만 그려서, 나란히 배치가 미리보기로 검증되지 않았다.
+            parts.append("".join(_pic_html(x, imgs) for x in p.iter(f"{_HP}pic")))
         else:
             body, align, _ = _runs_to_html(p, theme)
             parts.append(f'<div style="text-align:{align}">{body or "&nbsp;"}</div>')
@@ -321,6 +341,22 @@ def _table_html(tbl, theme: Theme, imgs: dict[str, str],
     return "".join(out)
 
 
+def _ratio(p_el, theme: Theme) -> float:
+    """이 문단의 줄간격 배수. 선언이 없으면 한/글 기본값."""
+    return theme.spacing.get(p_el.get("paraPrIDRef", ""), LINE_RATIO)
+
+
+def _is_cached(p_el) -> bool:
+    """한/글이 이 문단을 실제로 조판한 적이 있는가.
+
+    ``<hp:linesegarray>`` 는 한/글이 배치하면서 남기는 줄 캐시다. 있으면 그
+    문단이 속한 행의 **선언 높이는 한/글이 계산한 값**이라 믿을 수 있고,
+    없으면 우리가 써 넣은 추정치라 믿으면 안 된다. 배포 양식을 채운 문서는
+    이 둘이 한 표 안에 섞여 있으므로 문서 단위가 아니라 문단 단위로 본다.
+    """
+    return p_el.find(f"{_HP}linesegarray") is not None
+
+
 def _row_heights(tbl, theme: Theme, imgs: dict[str, str]) -> list[int]:
     """행 높이 = max(선언 높이, 셀 내용 추정 높이).
 
@@ -329,6 +365,8 @@ def _row_heights(tbl, theme: Theme, imgs: dict[str, str]) -> list[int]:
     높이엔 반영돼 있지 않아, 선언값만 믿으면 6쪽짜리가 3쪽으로 나온다.
     rowSpan 셀의 내용은 걸친 행들에 균등 분배한다 (근사).
     """
+    from hwpx.form_fit.measure import estimate_lines
+
     trs = tbl.findall(f"{_HP}tr")
     n = len(trs)
     heights = [2166] * n
@@ -340,10 +378,12 @@ def _row_heights(tbl, theme: Theme, imgs: dict[str, str]) -> list[int]:
             rs = int(span.get("rowSpan", "1")) if span is not None else 1
             if csz is not None and rs == 1:
                 heights[i] = max(heights[i], int(csz.get("height", "2166")))
-            # 텍스트 행의 선언 높이는 한글이 저장한 값이라 신뢰한다.
-            # 선언에 반영되지 않는 것은 셀 안의 이미지·중첩표다 — 그것만
-            # 추정에 넣는다 (텍스트까지 넣으면 실문서가 크게 부풀었다:
-            # 온리브 6쪽 실측이 8쪽, U300 6쪽이 10쪽으로).
+            inner_w = max(int(csz.get("width", "7200")) - 566, 1000) if csz is not None else 7200
+            # 한/글이 조판한 텍스트 행의 선언 높이는 그대로 믿는다 — 텍스트까지
+            # 다시 재면 실문서가 크게 부푼다(온리브 6쪽이 8쪽, U300 이 10쪽).
+            # 선언에 반영되지 않는 것은 (a) 셀 안의 이미지·중첩표, 그리고
+            # (b) **우리가 방금 써 넣어 아직 조판된 적 없는 문단**이다.
+            # (b) 를 빼먹으면 양식을 채운 문서의 쪽 수가 통째로 거짓이 된다.
             sub = tc.find(f"{_HP}subList")
             content = 0
             if sub is not None:
@@ -353,7 +393,17 @@ def _row_heights(tbl, theme: Theme, imgs: dict[str, str]) -> list[int]:
                     if itbl is not None:
                         content += int(itbl.find(f"{_HP}sz").get("height"))
                     elif ipic is not None:
-                        content += int(ipic.find(f"{_HP}sz").get("height"))
+                        # 한 문단의 그림들은 글자처럼 나란히 놓이므로 높이는 최댓값.
+                        content += max(int(x.find(f"{_HP}sz").get("height"))
+                                       for x in p_.iter(f"{_HP}pic"))
+                    elif not _is_cached(p_):
+                        text = _para_plain(p_)
+                        pt = max((theme.char.get(r.get("charPrIDRef", ""),
+                                                 CharStyle()).pt)
+                                 for r in p_.findall(f"{_HP}run")) \
+                            if p_.findall(f"{_HP}run") else 10.0
+                        lines = estimate_lines(text, inner_w, pt) if text.strip() else 1
+                        content += int(lines * pt * 100 * _ratio(p_, theme))
             if content:
                 per = (content + 566) / rs
                 for k in range(i, min(i + rs, n)):
@@ -411,11 +461,12 @@ def _cell_blocks(tc, theme: Theme, imgs: dict[str, str], inner_w: int):
             out.append((int(sz.get("height")),
                         _table_html(inner_tbl, theme, imgs, rows_slice=None)))
         elif inner_pic is not None:
-            sz = inner_pic.find(f"{_HP}sz")
-            out.append((int(sz.get("height")), _pic_html(inner_pic, imgs)))
+            pics = list(p.iter(f"{_HP}pic"))
+            h = max(int(x.find(f"{_HP}sz").get("height")) for x in pics)
+            out.append((h, "".join(_pic_html(x, imgs) for x in pics)))
         else:
             body, align, pt = _runs_to_html(p, theme)
-            pitch = int(pt * 100 * LINE_RATIO)
+            pitch = int(pt * 100 * _ratio(p, theme))
             text = _para_plain(p)
             n = estimate_lines(text, inner_w, pt) if text.strip() else 1
             out.append((n * pitch,
@@ -446,6 +497,28 @@ def _row_fragment_html(width: int, fill: str, inner: str, pos: str) -> str:
 
 # ------------------------------------------------------------------ 조판 --
 
+def _korean_word_break(header_root) -> str:
+    """문서의 한글 줄 나눔 기준을 CSS ``word-break`` 값으로.
+
+    ``<hh:breakSetting breakNonLatinWord="...">`` 가 한글의 "줄 나눔 기준"이다.
+    ``BREAK_WORD`` (한글 기본값)는 글자 단위로 끊고, ``KEEP_WORD`` 는 어절을
+    통째로 넘긴다. 브라우저의 CJK 기본 동작은 전자라, 이걸 읽지 않으면
+    어절 단위로 설정한 문서도 미리보기에서는 "실 / 험"처럼 갈라져 보인다 —
+    파일은 멀쩡한데 미리보기만 틀리는, 가장 헷갈리는 종류의 불일치다.
+
+    문단마다 다를 수 있지만 CSS 한 줄로 처리하므로 **다수결**을 쓴다. 실제
+    문서에서 이 값이 문단별로 갈리는 경우는 보지 못했다.
+    """
+    counts: dict[str, int] = {}
+    for node in header_root.iter(f"{_HH}breakSetting"):
+        counts[node.get("breakNonLatinWord", "BREAK_WORD")] = (
+            counts.get(node.get("breakNonLatinWord", "BREAK_WORD"), 0) + 1)
+    if not counts:
+        return "normal"
+    dominant = max(counts, key=lambda k: counts[k])
+    return "keep-all" if dominant == "KEEP_WORD" else "normal"
+
+
 def render_html(src: str | Path, out: str | Path | None = None) -> dict:
     """조판해서 자립 HTML 로. *out* 이 None 이면 결과 dict 의 "html" 로 반환.
 
@@ -460,6 +533,7 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
         imgs = _bin_data(z)
     theme = _parse_theme(header_root)
     body_w, body_h, mg = _page_body(sec_root)
+    word_break = _korean_word_break(header_root)
     warnings: list[str] = []
     over = sorted({int(t.find(f"{_HP}sz").get("width"))
                    for t in sec_root.iter(f"{_HP}tbl")
@@ -497,7 +571,8 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
                 new_page()
             pics_info.append({"page": len(pages), "gap_before": int(gap),
                               "height": b.height, "el": b.el})
-            pages[-1].append(f'<div style="text-align:center">{_pic_html(b.el, imgs)}</div>')
+            drawn = "".join(_pic_html(x, imgs) for x in (b.siblings or [b.el]))
+            pages[-1].append(f'<div style="text-align:center">{drawn}</div>')
             y += b.height
 
         elif b.kind == "table":
@@ -593,7 +668,8 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
 <title>{html.escape(src.stem)} — hwpx preview</title>
 <style>
   body {{ background:#525659; margin:0; padding:24px 0;
-         font-family:'함초롬바탕','Hancom Gothic','Malgun Gothic',Batang,serif; }}
+         font-family:'함초롬바탕','Hancom Gothic','Malgun Gothic',Batang,serif;
+         word-break:{word_break}; }}
   .page {{ position:relative; width:{_px(page_w)}; height:{_px(page_h)};
            background:#fff; margin:0 auto 16px; box-shadow:0 2px 8px rgba(0,0,0,.4);
            box-sizing:border-box;
@@ -615,9 +691,13 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
 </style>
 {warn_html}{"".join(doc_pages)}
 """
+    # 한/글이 아직 조판한 적 없는 문단 수. 0 이면 쪽 수는 한/글이 계산한
+    # 선언 높이만 쓴 것이고, 0 보다 크면 그만큼은 우리가 직접 잰 값이다.
+    measured = sum(1 for p_ in sec_root.iter(f"{_HP}p") if not _is_cached(p_))
     result = {"pages": len(pages), "warnings": warnings,
               "body_width": body_w, "body_height": body_h,
               "empty_pages": sum(1 for fr in pages if not fr),
+              "measured": measured,
               "pictures": pics_info}
     if out is None:
         result["html"] = html_doc

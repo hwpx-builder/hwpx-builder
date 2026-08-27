@@ -112,7 +112,23 @@ print(verify(dest, baseline=src).render())          # baseline= enables the edit
 | `set_spans` writes a paragraph | `set_cell` writes a cell, keeping its charPr |
 | `==highlight==` at author time | `highlight_cell` wraps text already there |
 | `autofit(table)` sizes new rows | `refit_cell(ref)` *reports*; Hancom re-flows |
+| `Grid(ratios=…)` guessed by hand | `autofit_columns(table)` derives them from content |
+| `Span(bold=…)` at author time | `char_style(doc, base, pt=, face=, bold=)` — size and typeface too |
+| — | `restyle(doc, cell, pt=, face=)` — every run in a cell, keeping bold |
+| — | `set_align(doc, para, "LEFT", line_spacing_percent=130)` |
+| — | `keep_korean_words(doc)` — 한글 줄 나눔을 어절 단위로 |
+| `b.picture(path)` | `fill_cell(doc, cell, ["설명", Img(path, width_mm=95)])` |
 | `verify(path)` | `verify(path, baseline=src)` |
+
+`char_style` exists because `derive_char_pr` only reaches bold and colour. Changing
+size or typeface needs the font tables too: **`<hh:fontfaces>` is per language**
+(HANGUL/LATIN/HANJA/…) and each list is a different length, so one id does not work
+across them — `ensure_face()` registers the face in all of them and returns the map.
+
+`autofit_columns` replaces guessing ratios blind. Measured on a real submission: the
+recipient re-tuned every column of both tables the ratios were guessed for (팀 구성
+순번 3504→2655, 관련 경력 26746→28161) and then hand-broke lines inside the cells to
+undo the bad wrapping. Deriving widths from content load removes that step.
 
 Worked example: `examples/edit_existing.py`.
 
@@ -136,7 +152,7 @@ Worked example: `examples/edit_existing.py`.
 자동으로 내면 틀렸을 때 조용히 틀리고, 제출 서류에서 그건 가장 나쁜 실패다.
 
 BMC 는 원래 특유의 격자 배치지만 여기서는 2열 목록으로 편다. 그 배치를 한글 표로
-재현하면 병합 셀이 잔뜩 생기고, **병합 표는 높이를 다시 계산할 수 없다**(규칙 8).
+재현하면 병합 셀이 잔뜩 생기고, **병합 표는 높이를 다시 계산할 수 없다**(규칙 9).
 
 ### 구식 `.hwp` 를 받았다면
 
@@ -168,6 +184,14 @@ render_png("doc.hwpx", "preview.png")     # one tall PNG (headless Chrome)
 render_pdf("doc.hwpx", "doc.pdf")         # vector PDF, exact paper size
 print(lint("doc.hwpx"))                    # layout smells, human sentences
 ```
+
+**The page count is only as honest as the heights it adds up.** For a text row the
+engine trusts the declared cell height — right for a file Hangul saved, wrong for one
+we just wrote, where that number is our own guess. It decides **per paragraph** using
+`<hp:linesegarray>`: a paragraph Hangul has laid out is trusted, one without a cache is
+measured. `render_html()` returns `measured` (how many paragraphs it had to measure) so
+you can tell which kind of answer you got. Before this split, a document that really
+needed 8 pages reported 6 — on a form with a 5-page limit.
 
 **Work with your eyes open.** After building or editing a document, render a
 PNG and *look at it* before declaring the work done — then fix what you see
@@ -201,10 +225,21 @@ print(to_hwp("사업계획서.hwpx").render())   # writes 사업계획서.hwp al
    structure survive but layout degrades badly — avoid when the jar is
    available.
 
-Every export is verified by re-reading the `.hwp` (`pyhwpxlib.hwp_reader` +
-`olefile`, the noncommercial `hwp` extra — see NOTICE; imports are lazy) and
-reporting token coverage; on auto, a garbage result falls through to the next
-route. Treat anything under 100% as a defect to inspect.
+Every export is verified two ways. Text coverage comes from re-reading the `.hwp`;
+**structure is counted straight out of the binary** by `hwpxkit.hwpbin`, which walks the
+HWP records with nothing but `olefile`. The report line reads
+`구조 대조: 그림 3->3, 표 14->14, 형광펜 8->8, BinData 3->3`, and a drop in any of them
+makes the report not-ok.
+
+Counting through a reader instead would lie in both directions: `pyhwpxlib` collapses
+every picture reference to the first image, and `hwp2hwpx` returns zero markpen because
+HWP stores 형광펜 as `PARA_RANGE_TAG`, not as a character property. A file with 8 intact
+highlights and 3 distinct pictures reads back as 0 and 1.
+
+Reading a `.hwp` back in (`hwp_to_hwpx`, `open_any`) prefers the jar when it is built,
+then repairs what the jar still gets wrong from the same binary: table page-break mode
+(binary 2 is `CELL`, not `TABLE`) and markpen. That is what makes "take the edited `.hwp`
+the recipient sent back and keep working" lossless.
 
 ## Non-negotiable rules
 
@@ -222,25 +257,30 @@ route. Treat anything under 100% as a defect to inspect.
    `baseline=<original>` — the stale-cache and scope checks cannot run without
    the before-and-after pair, and it is what separates a defect you introduced
    from one the form arrived with (both samples overflow a cell untouched).
-6. **Do not swallow exceptions around geometry setters.** `cell.width` is
+6. **Never shrink a row you did not create, and never measure one with a
+   document-wide font size.** `autofit()` takes a single `font_pt`; on a form whose
+   title rows are 17 pt and body 10 pt that collapses the title row and Hangul draws
+   the text as a black bar. Use each cell's own `charPr/@height`, and grow only.
+   `verify(baseline=…)` now fails on any row that shrank.
+7. **Do not swallow exceptions around geometry setters.** `cell.width` is
    read-only; a bare `except` there silently leaves every column at its default
    and the failure only shows up as text spilling past the border.
 
 ### Rules that apply only when editing
 
-7. **Drop the `<hp:linesegarray>` of every paragraph you touch, and no others.**
+8. **Drop the `<hp:linesegarray>` of every paragraph you touch, and no others.**
    Stale `textpos` makes Hancom draw new text into the old line slots. Everything
    in `hwpxkit.edit` does this; `set_spans` does not, because an authored
    paragraph has no cache. Never strip the cache document-wide.
-8. **Never run `autofit()` on a table you did not build.** Its row model assumes
+9. **Never run `autofit()` on a table you did not build.** Its row model assumes
    no merged cells; real forms merge heavily (26 in 온리브, 34 in U300), and on an
    untouched sample table it inflated a row from 16980 to 124354 HWPUNIT. Once
    the cache is gone Hancom re-lays-out the row correctly on open. Use
    `refit_cell()`, which reports and refuses to resize a merged table.
-9. **Never clear a paragraph's runs to empty it.** A nested `<hp:tbl>` lives
+10. **Never clear a paragraph's runs to empty it.** A nested `<hp:tbl>` lives
    *inside* an `<hp:run>`, so clearing runs deletes the sub-table and every image
    in it. Use `set_cell`, which skips paragraphs anchoring non-text runs.
-10. **Inherit the style you are replacing.** `ensure_run_style(base_char_pr_id=…)`
+11. **Inherit the style you are replacing.** `ensure_run_style(base_char_pr_id=…)`
     ignores the base — asked for a bold variant of a 12 pt run it returned an
     unrelated 10 pt style. Use `derive_char_pr()`, or an edited cell silently
     changes size and typeface.
@@ -260,10 +300,17 @@ Checkable without a renderer:
 Checkable with the built-in layout engine (`check_layout`): page count,
 empty pages, body-width overflow, picture push gaps, markpen render pairing.
 
+Checkable by geometry (`check_row_geometry`): whether any row is shorter than the
+largest glyph it holds. Real Hangul files have plenty of those (온리브 18, U300 23) —
+cell height is a minimum hint and Hangul grows the row on open — so this is reported
+split into pre-existing and newly introduced, never as a flat count.
+
 Checkable only with `baseline=` (an edit against the file it started from):
 - a changed paragraph that kept its layout cache — invisible inside a single file
 - how many cells the edit actually reached, vs how many you meant to touch
 - markpen balance relative to the original, and whether an overflow is new or inherited
+- **a row that got shorter than the form made it** — the check that reproduces the
+  black-bar accident, which every other layer passed
 
 **Not checkable here at all** — say so, do not imply otherwise:
 - *Highlight rendering.* rhwp ignores markpen completely. Verified by A/B:

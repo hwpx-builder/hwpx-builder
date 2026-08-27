@@ -38,7 +38,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from hwpxkit import (Grid, autofit, clear_guidance, dominant_font_pt, fill_cell,
+from hwpxkit import (Grid, clear_guidance, fill_cell, fit_rows,
                      find_label,
                      has_merged_cells,
                      iter_cells,
@@ -240,7 +240,7 @@ def main() -> int:
     #    쓸 수 없다. 채우는 순간 캐시가 지워지므로 비교할 대상이 사라진다.
     #    그래서 표 단위로 다시 계산한다.
     #
-    #    평소에는 남이 만든 표에 `autofit` 을 쓰지 말라는 것이 규칙이다(규칙 8).
+    #    평소에는 남이 만든 표에 `autofit` 을 쓰지 말라는 것이 규칙이다(규칙 9).
     #    행 높이 = 그 행 셀 높이의 최댓값이라는 모델이 병합 표에서 성립하지 않기
     #    때문이다. **그래서 병합 여부를 먼저 확인하고, 병합이 있으면 손대지
     #    않는다.** 이 양식은 병합이 없어서 안전하다.
@@ -250,12 +250,13 @@ def main() -> int:
         print(f"병합 표 {len(merged)}개 발견. 높이 조정을 건너뛴다 "
               f"(한글이 문서를 열 때 다시 배치한다).")
     else:
-        # 이 문서의 실제 본문 크기를 쓴다. autofit 기본값 10 pt 로 계산하면
-        # 12 pt 양식에서 줄 수를 적게 잡아 칸이 넘친다.
-        pt = dominant_font_pt(doc)
+        # `autofit` 이 아니라 `fit_rows` 다. autofit 은 표 하나에 글자 크기를
+        # 하나만 쓰는데, 배포 양식은 표제부가 본문보다 크다 — 본문 크기로 재면
+        # 큰 글자 행이 찌그러져 한/글이 검은 띠로 그린다(규칙 6). fit_rows 는
+        # 셀마다 자기 크기로 재고, 남의 양식이므로 키우기만 한다.
         for t in tables.values():
-            autofit(t, font_pt=pt)
-        print(f"행 높이 재계산: 표 {len(tables)}개 (본문 {pt:g} pt 기준)")
+            fit_rows(doc, t)
+        print(f"행 높이 재계산: 표 {len(tables)}개 (셀별 글자 크기, 축소 없음)")
 
     doc.save_to_path(out)
     print(f"saved: {out}")

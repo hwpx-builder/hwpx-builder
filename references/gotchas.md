@@ -423,7 +423,7 @@ installed, so build new elements with `parent.makeelement(...)`, not
 
 ✅ **`refit_cell` 은 채운 *뒤에는* 쓸 수 없다.** 편집 전 레이아웃 캐시와 비교하는
 방식인데, 채우는 순간 그 캐시가 지워진다. 표를 넣어 높이가 달라졌으면 표 단위로
-`autofit` 을 다시 돌린다. 단 **병합 여부를 먼저 확인할 것** — 규칙 8은 그대로
+`autofit` 을 다시 돌린다. 단 **병합 여부를 먼저 확인할 것** — 규칙 9은 그대로
 유효하고, 병합이 없는 양식이라 안전한 경우일 뿐이다.
 
 ✅ **표 안의 새 셀은 `intent` 를 물려받는다.** 문서 기본 `paraPr` 의
@@ -486,3 +486,85 @@ scanning one section would delete an image another still uses.
 📋 **`<hc:img>`, not `<hp:img>`.** The picture element is `hp:` but its image
 reference is `hc:`, the same trap as `<hh:margin>` holding `<hc:left>`. Searching
 the wrong namespace returns `None` with no error.
+
+---
+
+## Row heights and font size (행 높이)
+
+✅ **Never measure a row with a document-wide font size.** `autofit()` takes one
+`font_pt` for the whole table. On a distributed form whose title rows are 15–17 pt
+and whose body is 10 pt, measuring everything at 10 pt collapsed the title row from
+3179 to 1866 HWPUNIT. Hangul then crammed 17 pt text into 6.6 mm and drew it as
+**overlapping glyphs — a solid black bar** with the title invisible. `fit_table()`
+now reads each cell's own `charPr/@height`.
+
+✅ **Growing a foreign form's rows is fine; shrinking is almost always a bug.**
+There is no reason to make a distributed form's row shorter than its author made it.
+`verify(baseline=…)` now reports any row that shrank — that single rule reproduces
+the black-bar accident exactly, where every structural check and the preview passed.
+
+⚠️ **A too-short declared height is normal in real Hangul files.** Cell height is a
+minimum hint and Hangul grows the row on open. 온리브 has 18 such rows, U300 has 23.
+So an absolute "row must fit its font" rule cries wolf; report it split into
+pre-existing vs newly introduced, the way `overflow introduced` does.
+
+---
+
+## Preview fidelity (미리보기가 거짓말하는 방식)
+
+✅ **The preview grew rows to fit text while paginating on declared heights.** HTML
+tables auto-grow, so a document with collapsed rows *looked* perfect in the PNG while
+the page count came from the (wrong) declared numbers. Looking at the render gave
+false confidence. Height arithmetic and drawing must come from the same numbers.
+
+✅ **Declared heights are trustworthy only where Hangul actually laid the text out.**
+`<hp:linesegarray>` is the signal: a paragraph that has one was measured by Hangul; one
+that doesn't is our own guess. A filled form has both in the same table, so decide
+**per paragraph**, not per file. Trusting declared heights everywhere made a document
+that really needed 8 pages report 6 — on a form with a 5-page limit.
+
+✅ **`<hh:lineSpacing>` is not a direct child of `<hh:paraPr>`.** `find()` misses it;
+you need `iter()`. The preview hardcoded `LINE_RATIO = 1.6` for years, so changing a
+document's line spacing moved the preview page count by exactly zero.
+
+✅ **Only the first `<hp:pic>` of a paragraph was drawn.** Two inline pictures in one
+paragraph sit side by side like glyphs (that is how you get a figure row without a
+borderless table) — the preview drew one and counted one, so the layout could not be
+checked. Their row height is the **max**, not the sum.
+
+---
+
+## HWP export/import (.hwp 왕복)
+
+✅ **Table page-break mode: binary 2 ↔ `pageBreak="CELL"`.** Verified against Hancom's
+own matched pairs — 양식.hwp (5 tables) and 온리브.hwp (26 tables) are all binary 2, and
+the HWPX Hancom saved from them says `CELL` for every one. The official spec table 76
+lists value 2 as "나누지 않음", which is an error in the spec. `hwp2hwpx` reads 2 as
+`TABLE`, so a round-trip silently flips every container box to "don't split".
+
+✅ **Highlights survive in `.hwp` but no reader gives them back.** HWP stores 형광펜 as
+`PARA_RANGE_TAG` (sort=2, 24-bit BGR), not as a character property. Both readers return
+zero markpen, which reads as "the export lost the highlights" when the file is fine.
+Verify by scanning the records, and restore markpen from them when reading back.
+
+✅ **`pyhwpxlib` collapses every picture reference to the first image.** U300 (13
+pictures) comes back with 13 BinData streams and every `<hc:img>` pointing at image 1 —
+the whole document looks like the same picture repeated. Prefer the hwpConverter jar
+for reading; it resolves them individually.
+
+✅ **Editing the ET tree directly does not mark the part dirty.** `python-hwpx` writes
+the untouched original bytes on save, so the repairs vanish with no error. Call
+`doc.sections[0].mark_dirty()` after any raw XML surgery.
+
+---
+
+## Index spaces (표 번호는 파일마다 다르다)
+
+✅ **`CellRef.table_index` counts nested tables.** Put a `Grid` inside a container box
+and every later table's number shifts, so `t5` in the source form and `t5` in the filled
+document are different tables. Comparing geometry by that key reported "2 rows shrank"
+for an edit that shrank nothing. Compare top-level tables by their own order.
+
+✅ **`iter_cells()` builds fresh wrapper objects each walk.** `id(ref.table)` is not
+stable between two iterations — key on `ref.table.element` or collect in a single pass.
+

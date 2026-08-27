@@ -24,6 +24,8 @@ from typing import Iterable, Sequence
 from .richtext import HP, Span, add_spans, paragraph_text, parse_markup, set_spans
 from .units import A4_WIDTH, body_width, split_width
 
+HH_NS_TAG = "{http://www.hancom.co.kr/hwpml/2011/head}"
+
 HP_NS_TAG = HP
 
 BODY_PT = 10.0        # height=1000. 두 실측 문서 모두에서 본문 크기의 최빈값
@@ -36,6 +38,22 @@ GREY_TABLE = "#D9D9D9"    # content_table 의 머리글 행
 #: 라벨/소제목 문단을 여는 마커 문자들. 실제 문서에서 이들은 전부 평범한
 #: 텍스트다. 한글의 자동 번호 매기기가 **아니다**.
 MARKERS = "□·❶❷❸❹▪※○▶◦-"
+
+
+@dataclass
+class Img:
+    """칸 안에 넣을 그림 블록. ``Grid`` 와 같은 자리에 섞어 쓴다.
+
+    *path* 는 **실제로 있는 파일**이어야 한다. 없으면 :func:`fill_cell` 이
+    예외를 낸다 — 제출 문서에서 잘못된 그림은 빈칸보다 나쁘고(규칙 4),
+    조용히 건너뛰면 빠진 줄도 모른다.
+
+    *height_mm* 을 비우면 실제 종횡비로 계산한다.
+    """
+    path: "str | Path"
+    width_mm: float = 105.0
+    height_mm: float | None = None
+    caption: str = ""
 
 
 @dataclass
@@ -400,3 +418,134 @@ def _aspect_ratio(data: bytes, path: Path) -> float:
     except Exception:
         pass
     return 0.75
+
+
+def autofit_columns(table, *, min_frac: float = 0.06, damp: float = 0.5,
+                    weights: "Sequence[float] | None" = None) -> list[int]:
+    """열 너비를 내용량에 맞춰 다시 나눈다. 새 너비 목록을 돌려준다.
+
+    ``Grid(ratios=...)` 는 비율을 **눈 감고 정하게** 만든다. 실제로 그렇게 정한
+    비율은 짧은 라벨 열에 너무 넉넉하고 글이 많은 열에 빡빡해서, 받아 본 사람이
+    칸마다 손으로 줄바꿈을 넣어 고쳤다(실측: 팀 구성 표 순번 3504->2655,
+    경력 26746->28161). 그 조정을 글자 수로 대신한다.
+
+    *damp* 는 글자 수 차이를 그대로 너비로 옮기지 않기 위한 감쇠다 (0.5 면
+    제곱근 비례). 1.0 이면 글자 수에 정비례하는데, 그러면 라벨 열이 읽지 못할
+    만큼 좁아진다. *min_frac* 은 어떤 열도 그 아래로는 못 가는 하한이다.
+
+    표 전체 너비는 유지한다 — 늘리면 본문 폭을 넘겨서 오른쪽 여백을 침범한다.
+    병합 셀이 있으면 열 모델이 성립하지 않으므로 손대지 않고 빈 목록을 돌려준다.
+    """
+    from .edit import has_merged_cells
+
+    rows = list(table.rows)
+    if not rows or has_merged_cells(table):
+        return []
+    ncols = len(list(rows[0].cells))
+    total = sum(c.width or 0 for c in rows[0].cells)
+    if not total or ncols < 2:
+        return []
+
+    if weights is None:
+        load = [0.0] * ncols
+        for row in rows:
+            for i, cell in enumerate(row.cells):
+                if i >= ncols:
+                    continue
+                text = " ".join(paragraph_text(p_) for p_ in cell.paragraphs)
+                # 한 칸의 부담은 '가장 긴 행'이 아니라 평균에 가깝다. 합으로 잡되
+                # 머리글 한 줄이 열 전체를 지배하지 않도록 행 수로 나눈다.
+                load[i] += len(text.strip())
+        load = [x / max(len(rows), 1) for x in load]
+        weights = [max(x, 1.0) ** damp for x in load]
+
+    ssum = sum(weights) or 1.0
+    frac = [w / ssum for w in weights]
+    # 하한을 적용하고 남은 몫을 다시 비례 배분한다.
+    for _ in range(4):
+        short = [i for i, f in enumerate(frac) if f < min_frac]
+        if not short:
+            break
+        spare = 1.0 - min_frac * len(short)
+        rest = sum(frac[i] for i in range(ncols) if i not in short) or 1.0
+        frac = [min_frac if i in short else frac[i] / rest * spare
+                for i in range(ncols)]
+
+    widths = [int(total * f) for f in frac]
+    widths[-1] += total - sum(widths)          # 합계를 표 너비에 정확히 맞춘다
+    _set_column_widths(table, widths)
+    return widths
+
+
+def cell_font_pt(doc, cell, default: float = BODY_PT) -> float:
+    """셀에서 실제로 쓰인 가장 큰 글자 크기(pt)."""
+    header = doc.headers[0].element
+    best = 0.0
+    for para in cell.paragraphs:
+        for run in para.runs:
+            cid = run.element.get("charPrIDRef")
+            if cid is None:
+                continue
+            cp = header.find(f".//{HH_NS_TAG}charPr[@id='{cid}']")
+            if cp is None:
+                continue
+            try:
+                best = max(best, int(cp.get("height", "1000")) / 100)
+            except ValueError:
+                pass
+    return best or default
+
+
+def fit_rows(doc, table, *, ratio: float = LINE_RATIO, grow_only: bool = True) -> int:
+    """행 높이를 내용에 맞춘다. ``autofit`` 의 안전판. 표 전체 높이를 돌려준다.
+
+    ``autofit`` 과 세 가지가 다르다.
+
+    1. **셀마다 자기 글자 크기로 잰다.** ``autofit`` 은 표 하나에 ``font_pt`` 를
+       하나만 쓴다. 표제부가 17 pt 이고 본문이 10 pt 인 배포 양식에서 10 pt 로
+       재면 표제부 행이 3179 에서 1866 HWPUNIT 으로 줄고, 한/글은 그 칸에 큰
+       글자를 욱여넣어 **글자가 겹친 검은 띠**로 그린다. 실제로 제출 직전
+       문서에서 그렇게 났다.
+    2. **그림을 높이에 센다.** ``autofit`` 은 ``<hp:pic>`` 을 빼먹는다.
+    3. **줄이지 않는다** (*grow_only*). 남의 양식에 높이를 다시 쓰는 일이므로
+       (규칙 6·9) 키우기만 한다. 계산이 틀렸을 때 조용히 망가지는 쪽은 늘 축소다.
+
+    ``verify(baseline=…)`` 의 "행 높이 축소" 검사와 짝이다 — 이걸 쓰면 그 검사가
+    울릴 일이 없고, 울린다면 진짜 결함이다.
+    """
+    from hwpx.form_fit.measure import estimate_lines
+
+    total = 0
+    for row in table.rows:
+        needed = 0
+        for cell in row.cells:
+            pt = cell_font_pt(doc, cell)
+            pitch = int(pt * 100 * ratio)
+            inner = max((cell.width or 0) - 2 * CELL_PAD, 1000)
+            used = 0
+            for para in cell.paragraphs:
+                pics = [pic for run in para.runs
+                        for pic in run.element.iter(f"{HP_NS_TAG}pic")]
+                if pics:
+                    # 한 문단의 그림은 글자처럼 나란히 놓이므로 높이는 최댓값.
+                    used += max(int(x.find(f"{HP_NS_TAG}sz").get("height", "0"))
+                                for x in pics)
+                    continue
+                text = paragraph_text(para)
+                if text.strip():
+                    used += estimate_lines(text, inner, pt) * pitch
+                elif not _cell_tables(cell):
+                    used += pitch
+            for nested in _cell_tables(cell):
+                # 중첩 표는 우리가 만든 것이므로 줄여도 된다.
+                used += fit_rows(doc, nested, ratio=ratio, grow_only=False) + pitch
+            needed = max(needed, used + 2 * CELL_PAD, pitch)
+            if grow_only:
+                needed = max(needed, cell.height or 0)
+        for cell in row.cells:
+            cell.set_size(height=needed)
+        total += needed
+    sz = table.element.find(f"{HP_NS_TAG}sz")
+    if sz is not None:
+        sz.set("height", str(total))
+    return total

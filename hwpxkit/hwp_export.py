@@ -86,12 +86,29 @@ class ExportReport:
     route: str                       # "direct" | "html"
     coverage: float                  # fraction of source tokens found in the .hwp
     tokens_total: int
+    #: 원본 HWPX 와 결과 .hwp 의 개수 대조. ``{"그림": (3, 3), ...}``
+    structure: dict = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        return self.coverage >= 0.9
+        return self.coverage >= 0.9 and not self.structure_losses
+
+    @property
+    def structure_losses(self) -> dict:
+        """개수가 줄어든 항목만. 늘어난 것은 문제 삼지 않는다 —
+        형광펜은 run 을 걸치면 쌍이 쪼개져 개수가 늘 수 있다."""
+        return {k: v for k, v in (self.structure or {}).items() if v[1] < v[0]}
+
+    def _structure_line(self) -> str:
+        if not self.structure:
+            return "구조 대조: 하지 않음"
+        losses = self.structure_losses
+        summary = ", ".join(f"{k} {a}->{b}" for k, (a, b) in self.structure.items())
+        return ("구조 대조: " + summary) if not losses else (
+            "구조 손실: " + ", ".join(f"{k} {a}->{b}" for k, (a, b) in losses.items())
+            + f"  (전체: {summary})")
 
     def render(self) -> str:
         labels = {
@@ -103,6 +120,7 @@ class ExportReport:
             f"저장: {self.dest}",
             f"경로: {self.route}" + labels.get(self.route, ""),
             f"텍스트 보존율: {self.coverage:.0%} ({self.tokens_total}개 표본 기준)",
+            self._structure_line(),
         ]
         if self.missing:
             lines.append(f"누락 예시: {self.missing[:5]}")
@@ -217,6 +235,44 @@ def hancom_opens_hwpx() -> bool:
 
 
 # ------------------------------------------------------------ verification --
+
+def _structure_counts(hwpx: Path) -> dict[str, int]:
+    """원본 HWPX 쪽의 개수. 결과 .hwp 와 맞대 보기 위한 것."""
+    import re
+
+    with zipfile.ZipFile(hwpx) as z:
+        names = [n for n in z.namelist() if n.startswith("Contents/section")]
+        body = "".join(z.read(n).decode("utf-8", "replace") for n in names)
+        bins = [n for n in z.namelist() if n.startswith("BinData/")]
+    return {
+        "그림": len(re.findall(r"<hp:pic\b", body)),
+        "표": len(re.findall(r"<hp:tbl\b", body)),
+        "형광펜": body.count("markpenBegin"),
+        "BinData": len(bins),
+    }
+
+
+def _structure_check(src: Path, dest: Path) -> dict:
+    """HWPX 원본과 .hwp 결과의 구조를 **바이트로** 대조한다.
+
+    왕복 변환으로 세면 안 된다. 리더 두 개가 각각 다르게 거짓말을 한다 —
+    ``pyhwpxlib`` 는 그림 참조를 첫 장으로 뭉개고, ``hwp2hwpx`` 는 형광펜을
+    통째로 잃는다. 실제로 형광펜 8개가 멀쩡히 들어 있는 파일을 두고 "다
+    날아갔다"고 판단할 뻔했다. :mod:`hwpxkit.hwpbin` 이 레코드를 직접 센다.
+
+    반환은 ``{"그림": (원본, 결과), ...}``. 개수가 다른 항목만 결함이다.
+    """
+    from . import hwpbin
+
+    want = _structure_counts(src)
+    got = hwpbin.counts(dest)
+    return {
+        "그림": (want["그림"], got["pictures"]),
+        "표": (want["표"], got["tables"]),
+        "형광펜": (want["형광펜"], got["markpen"]),
+        "BinData": (want["BinData"], len(hwpbin.bindata_names(dest))),
+    }
+
 
 def _hwpx_tokens(path: Path) -> list[str]:
     """Distinctive text tokens from every ``<hp:t>`` in the HWPX sections."""
@@ -423,6 +479,11 @@ def to_hwp(src: str | Path, dest: str | Path | None = None, *,
 
     if coverage < 0.9:
         warnings.append("텍스트 보존율이 90% 미만 — 결과물을 반드시 눈으로 대조할 것.")
+    try:
+        structure = _structure_check(src, dest)
+    except Exception as exc:                       # noqa: BLE001
+        structure = {}
+        warnings.append(f"구조 대조 실패(파일은 생성됨): {exc}")
     return ExportReport(dest=dest, route=route, coverage=coverage,
                         tokens_total=len(tokens), missing=missing,
-                        warnings=warnings)
+                        warnings=warnings, structure=structure)

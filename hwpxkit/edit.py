@@ -34,6 +34,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, Sequence
+from pathlib import Path
 
 from .richtext import HP, YELLOW, Span, parse_markup, paragraph_text, run_text
 from .units import HWP_PER_MM as MM
@@ -589,13 +590,20 @@ def set_cell(doc, cell, markup: str, *, keep_style: bool = True,
     lines = markup.split("\n") if markup else [""]
     base = paragraph_char_pr(writable[0]) if writable and keep_style else None
 
+    # 원래 있던 문단 수. 이 뒤로 만드는 문단은 자기 charPr 이 문서 기본값이라
+    # 물려받을 것이 없다 — 첫 문단의 *base* 를 써야 한다. 예전에는 새 문단도
+    # `paragraph_char_pr(para)` 를 봐서, 줄바꿈이 있는 칸은 **둘째 줄부터 서체가
+    # 양식 기본값으로 되돌아갔다**(팀 구성 표의 학과 칸에서 실제로 그랬다).
+    n_existing = len(writable)
+
     for i, line in enumerate(lines):
         if i < len(writable):
             para = writable[i]
         else:
             para = cell.add_paragraph("")
             writable.append(para)
-        local_base = paragraph_char_pr(para) if keep_style else None
+        local_base = (paragraph_char_pr(para)
+                      if keep_style and i < n_existing else None)
         if flatten:
             flatten_indent(doc, para)
         _clear_runs(para)
@@ -644,8 +652,9 @@ def fill_cell(doc, cell, blocks: Sequence, *, keep_style: bool = True,
     내보낸다. 그리고 :func:`set_cell` 과 같은 이유로 이미 표·그림을 붙들고 있는
     문단은 건드리지 않는다.
     """
-    from .boxdoc import BODY_PT, GREY_TABLE, Grid, _set_column_widths
-    from .units import split_width
+    from .boxdoc import (BODY_PT, GREY_TABLE, Grid, Img, _aspect_ratio,
+                         _set_column_widths)
+    from .units import mm, split_width
 
     report = report if report is not None else EditReport()
     paras = list(cell.paragraphs)
@@ -654,8 +663,45 @@ def fill_cell(doc, cell, blocks: Sequence, *, keep_style: bool = True,
     inner_width = int((cell.width or 0) * ratio) or None
 
     used = 0
+
+    def _next(center: bool = False):
+        """다음 문단을 확보한다. 남은 것이 없으면 새로 만든다."""
+        nonlocal used
+        para = (writable[used] if used < len(writable)
+                else cell.add_paragraph(""))
+        if used < len(writable):
+            _clear_runs(para)
+            drop_layout_cache(para)
+        used += 1
+        if flatten:
+            flatten_indent(doc, para)
+        if center:
+            set_align(doc, para, "CENTER", left=0, intent=0)
+        return para
+
     for item in blocks:
-        if isinstance(item, Grid):
+        if isinstance(item, Img):
+            # 없는 그림을 지어내지 않는다(규칙 4). 조용히 건너뛰면 빠진 줄도 모른다.
+            path = Path(item.path)
+            if not path.exists():
+                raise FileNotFoundError(f"그림 파일이 없다: {path}")
+            from hwpx._document.media import add_image
+
+            data = path.read_bytes()
+            fmt = path.suffix.lstrip(".").lower() or "png"
+            width = mm(item.width_mm)
+            height = (mm(item.height_mm) if item.height_mm is not None
+                      else round(width * _aspect_ratio(data, path)))
+            para = _next(center=True)
+            para.add_picture(str(add_image(doc, data, fmt)),
+                             width=width, height=height, align="CENTER")
+            report.paragraphs += 1
+            if item.caption:
+                cap = _next(center=True)
+                _write_spans(doc, cap, parse_markup(f"< {item.caption} >"),
+                             base, color)
+                report.paragraphs += 1
+        elif isinstance(item, Grid):
             # 표는 앵커 문단 하나를 차지한다. 남은 문단이 없으면 새로 만든다.
             anchor = (writable[used] if used < len(writable)
                       else cell.add_paragraph(""))
@@ -1116,3 +1162,169 @@ def refit_cell(ref: CellRef, *, font_pt: float = 10.0,
             for c in list(ref.table.rows)[ref.row].cells:
                 c.set_size(height=(c.height or 0) + extra_lines * pitch)
     return warnings
+
+
+# ------------------------------------------------------------- 글자·문단 --
+
+def ensure_face(doc, face: str) -> dict[str, str]:
+    """*face* 서체를 **언어별 글꼴 목록 전부**에 넣고 언어 -> id 를 돌려준다.
+
+    ``<hh:fontfaces>`` 는 HANGUL/LATIN/HANJA/… 언어마다 목록이 따로 있고
+    ``<hh:fontRef>`` 도 언어마다 다른 id 를 가리킨다. 한 목록에만 넣고 같은
+    번호를 전부에 쓰면 라틴 문자만 엉뚱한 서체로 나온다 — 목록 길이가 언어마다
+    다르기 때문에 번호가 어긋난다.
+    """
+    header = doc.headers[0].element
+    ids: dict[str, str] = {}
+    for group in header.iter(f"{HH}fontfaces"):
+        for group_face in group.findall(f"{HH}fontface"):
+            lang = group_face.get("lang")
+            fonts = group_face.findall(f"{HH}font")
+            hit = next((f for f in fonts if f.get("face") == face), None)
+            if hit is None:
+                hit = group_face.makeelement(f"{HH}font", {
+                    "id": str(len(fonts)), "face": face,
+                    "type": "TTF", "isEmbedded": "0"})
+                group_face.append(hit)
+                group_face.set("fontCnt", str(len(fonts) + 1))
+            ids[lang] = hit.get("id")
+        break
+    return ids
+
+
+def char_style(doc, base_id: str | int | None = None, *, pt: float | None = None,
+               face: str | None = None, bold: bool = False,
+               color: str | None = None) -> str | None:
+    """*base_id* 를 물려받되 크기·서체·굵기·색만 바꾼 charPr 의 id.
+
+    :func:`derive_char_pr` 은 굵기와 색까지만 바꿀 수 있어서, 크기나 서체를
+    바꾸려면 쓸 수가 없었다. 밑줄·자간·외곽선 같은 나머지 속성은 기준 charPr
+    에서 그대로 복제하므로 양식이 지정해 둔 것을 잃지 않는다(규칙 11).
+
+    조건식에 **서체와 크기를 모두 넣는 것이 중요하다.** 크기만 보면 이미 있는
+    다른 서체의 같은 크기 charPr 을 돌려주고, 서체 변경이 조용히 무시된다.
+    """
+    if base_id is None:
+        return doc.ensure_run_style(bold=bold, color=color)
+    header = doc.headers[0]
+    height = None if pt is None else str(int(round(pt * 100)))
+    face_ids = ensure_face(doc, face) if face else {}
+
+    def font_ok(el) -> bool:
+        if not face_ids:
+            return True
+        ref = el.find(f"{HH}fontRef")
+        if ref is None:
+            return False
+        return all(ref.get(lang.lower()) == fid for lang, fid in face_ids.items()
+                   if lang.lower() in ref.attrib)
+
+    def predicate(el) -> bool:
+        return ((height is None or el.get("height") == height)
+                and (color is None or el.get("textColor") == color)
+                and (el.find(f"{HH}bold") is not None) == bold
+                and font_ok(el))
+
+    def modifier(el) -> None:
+        if height is not None:
+            el.set("height", height)
+        if color is not None:
+            el.set("textColor", color)
+        ref = el.find(f"{HH}fontRef")
+        if ref is not None:
+            for lang, fid in face_ids.items():
+                if lang.lower() in ref.attrib:
+                    ref.set(lang.lower(), fid)
+        existing = el.find(f"{HH}bold")
+        if bold and existing is None:
+            underline = el.find(f"{HH}underline")
+            node = el.makeelement(f"{HH}bold", {})
+            if underline is not None:
+                el.insert(list(el).index(underline), node)
+            else:
+                el.append(node)
+        elif not bold and existing is not None:
+            el.remove(existing)
+
+    return header.ensure_char_property(
+        predicate=predicate, modifier=modifier,
+        base_char_pr_id=str(base_id)).get("id")
+
+
+def restyle(doc, container, *, pt: float | None = None, face: str | None = None,
+            color: str | None = None) -> int:
+    """셀이나 문단 안 모든 run 의 크기·서체를 바꾼다. **굵기는 유지한다.**
+
+    바꾼 run 수를 돌려준다. ``set_cell`` 로 값을 **쓴 뒤에** 부르는 것이 맞다 —
+    미리 바꿔 두면 줄바꿈으로 새로 생긴 문단에는 적용되지 않는다.
+
+    run 마다 따로 파생하는 이유는 굵기다. 한 charPr 로 전부 덮으면
+    ``**...**`` 로 준 강조가 통째로 사라진다.
+    """
+    header = doc.headers[0].element
+    paras = list(getattr(container, "paragraphs", None) or [container])
+    n = 0
+    for para in paras:
+        for run in para.runs:
+            cid = run.element.get("charPrIDRef")
+            if cid is None:
+                continue
+            src = header.find(f".//{HH}charPr[@id='{cid}']")
+            bold = src is not None and src.find(f"{HH}bold") is not None
+            new_id = char_style(doc, cid, pt=pt, face=face, color=color, bold=bold)
+            if new_id is not None:
+                run.element.set("charPrIDRef", str(new_id))
+                n += 1
+    return n
+
+
+def set_align(doc, paragraph, align: str | None = None, *,
+              line_spacing_percent: int | None = None,
+              left: int | None = None, intent: int | None = None) -> bool:
+    """문단의 정렬·줄간격·여백을 바꾼다. 바꿨으면 ``True``.
+
+    양식 문단은 대개 ``JUSTIFY``(양쪽 혼합)다. 좁은 표 칸에서는 마지막 줄을 뺀
+    모든 줄을 억지로 늘리면서 낱말 사이가 벌어져, 낱말이 쪼개진 것처럼 보인다
+    ("누 적 급여", "제한 적"). ``LEFT`` 로 두면 오른쪽 끝만 들쭉날쭉해지고
+    줄바꿈은 정상으로 읽힌다.
+
+    ``ensure_paragraph_format`` 은 기준 paraPr 을 실제로 지키므로 지정하지 않은
+    속성은 그대로 남는다.
+    """
+    base = paragraph.element.get("paraPrIDRef")
+    if base is None:
+        return False
+    margins = {}
+    if left is not None:
+        margins["left"] = left
+    if intent is not None:
+        margins["intent"] = intent
+    new_id = doc.headers[0].ensure_paragraph_format(
+        base_para_pr_id=base, alignment=align,
+        line_spacing_percent=line_spacing_percent,
+        margins=margins or None)
+    if new_id is None or str(new_id) == str(base):
+        return False
+    paragraph.element.set("paraPrIDRef", str(new_id))
+    return True
+
+
+def keep_korean_words(doc) -> int:
+    """한글 줄 나눔 기준을 **어절 단위**로 바꾼다. 바꾼 paraPr 수를 돌려준다.
+
+    양식 기본값은 ``breakNonLatinWord="BREAK_WORD"`` — 한글을 글자 단위로 끊는다.
+    한/글의 기본값이라 평소에는 눈에 안 띄지만, 좁은 표 칸에서는 "실험"이
+    "실 / 험"으로 갈라져 오식처럼 보인다. ``KEEP_WORD`` 로 두면 어절이 통째로
+    다음 줄로 넘어간다.
+
+    문단마다 파생하지 않고 문서 전체에 적용한다. 이건 한 문단의 서식이 아니라
+    문서 하나의 조판 규칙이고, 일부만 바꾸면 같은 표 안에서 칸마다 줄바꿈
+    규칙이 달라진다.
+    """
+    changed = 0
+    for header in doc.headers:
+        for node in header.element.iter(f"{HH}breakSetting"):
+            if node.get("breakNonLatinWord") != "KEEP_WORD":
+                node.set("breakNonLatinWord", "KEEP_WORD")
+                changed += 1
+    return changed

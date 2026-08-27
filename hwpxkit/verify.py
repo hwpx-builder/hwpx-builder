@@ -20,6 +20,8 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+HH = "{http://www.hancom.co.kr/hwpml/2011/head}"
+
 #: 예전에 이 이름을 import 하던 코드를 위해 남겨 둔다. 실제 메시지는 이제
 
 
@@ -310,6 +312,111 @@ def check_against_baseline(path: str | Path, baseline: str | Path) -> list[Check
     return out
 
 
+def _row_geometry(path):
+    """문서의 행 높이와 그 행이 담은 최대 글자 크기.
+
+    반환: ``{"s0/t3/r1": (행높이, 최대pt)}``. 행을 키로 잡는 이유는 한/글이
+    행 단위로 높이를 맞추기 때문이다.
+    """
+    from hwpx.document import HwpxDocument
+
+    from .edit import iter_cells
+
+    doc = HwpxDocument.open(str(path))
+    header = doc.headers[0].element
+    sizes: dict[str, float] = {}
+    out: dict[str, tuple[int, float]] = {}
+    for cp in header.iter(f"{HH}charPr"):
+        try:
+            sizes[cp.get("id")] = int(cp.get("height", "1000")) / 100
+        except (TypeError, ValueError):
+            pass
+    # **최상위 표만** 본다. `table_index` 는 중첩 표까지 번호를 매기므로, 우리가
+    # 칸 안에 표를 넣으면 그 뒤 번호가 전부 밀린다 — 원본의 t5 와 결과의 t5 가
+    # 서로 다른 표가 되어, 멀쩡한 편집이 "행 높이 축소"로 잡혔다(실측).
+    # 최상위 표 순서로 다시 번호를 매기면 중첩 표를 몇 개 넣든 짝이 유지된다.
+    # 한 번만 순회한다. `iter_cells` 는 돌 때마다 래퍼 객체를 새로 만들어서
+    # `id(ref.table)` 이 순회 사이에 유지되지 않는다 — 두 번 돌면 KeyError 다.
+    order: dict[int, int] = {}
+    for ref in iter_cells(doc):
+        if ref.depth != 0:
+            continue
+        seq = order.setdefault(id(ref.table.element), len(order))
+        key = f"s{ref.section}/T{seq}/r{ref.row}"
+        pt = 0.0
+        for para in ref.cell.paragraphs:
+            for run in para.runs:
+                pt = max(pt, sizes.get(run.element.get("charPrIDRef"), 0.0))
+        height, _ = out.get(key, (0, 0.0))
+        out[key] = (max(height, ref.cell.height or 0), max(pt, _))
+    return out
+
+
+def check_row_geometry(path: str | Path,
+                       baseline: str | Path | None = None) -> list[CheckResult]:
+    """행 높이가 (a) 원본보다 줄지 않았고 (b) 자기 글자를 담는가.
+
+    이 검사가 없어서 실제로 제출 직전 문서를 한 번 망가뜨렸다. 행 높이를 다시
+    계산하면서 표제부의 17 pt 줄을 본문 10 pt 기준으로 재는 바람에 행이 3179
+    에서 1866 HWPUNIT 으로 줄었고, 한/글은 그 칸에 큰 글자를 욱여넣어 **글자가
+    서로 겹친 검은 띠**로 그렸다. 구조 검사도 미리보기도 통과했다 — 미리보기는
+    행을 내용에 맞춰 늘려 그리므로 오히려 멀쩡해 보였다.
+
+    **축소 금지가 본 검사다.** 남의 양식을 채우면서 행을 원본보다 낮출 이유는
+    없다. 내용이 늘었으면 키우는 것이 맞고, 줄어드는 쪽은 대개 계산 실수다.
+    *baseline* 이 있을 때만 볼 수 있고, 실제 결함을 정확히 재현한다.
+
+    절대 기준(글자가 물리적으로 안 들어가는 높이)도 함께 보지만 **한/글이 저장한
+    실문서에도 그런 행이 흔하다** — 셀 높이는 최소값 힌트고 한/글이 열면서
+    늘리기 때문이다. 실측: 온리브 18행, U300 23행이 pt·줄간격 기준에 못 미친다.
+    그래서 기준을 "글자 몸통도 안 들어가는 높이"까지 낮추고, ``overflow
+    introduced`` 와 같은 방식으로 **원본에 있던 것과 새로 생긴 것을 나눠서**
+    보고한다. 원래 그랬던 것을 우리 결함으로 세면 검사를 아무도 안 믿게 된다.
+    """
+    out: list[CheckResult] = []
+    try:
+        now = _row_geometry(path)
+    except Exception as exc:                       # noqa: BLE001
+        return [CheckResult("행 높이", False, checked=False, detail=str(exc))]
+
+    def too_tight(geo):
+        # 글자 몸통(pt * 100 HWPUNIT)조차 안 들어가는 행. 여백·줄간격은 뺀다 —
+        # 그것까지 요구하면 실문서가 무더기로 걸린다.
+        return {k for k, (h, pt) in geo.items() if pt and h and h < pt * 100}
+
+    tight_now = too_tight(now)
+    if baseline is None:
+        out.append(CheckResult(
+            "행 높이 대 글자 크기", not tight_now,
+            detail="모든 행이 자기 글자를 담는다" if not tight_now
+            else f"{len(tight_now)}행이 글자보다 낮다 (원본부터 그런지는 "
+                 f"baseline 없이 알 수 없다): " + ", ".join(sorted(tight_now)[:3])))
+        return out
+
+    try:
+        was = _row_geometry(baseline)
+    except Exception as exc:                       # noqa: BLE001
+        out.append(CheckResult("행 높이 축소", False, checked=False, detail=str(exc)))
+        return out
+
+    shrunk = [(k, was[k][0], now[k][0]) for k in now
+              if k in was and now[k][0] < was[k][0]]
+    out.append(CheckResult(
+        "행 높이 축소", not shrunk,
+        detail="원본보다 낮아진 행 없음" if not shrunk
+        else f"{len(shrunk)}행 축소: " + ", ".join(
+            f"{k} {a}->{b}" for k, a, b in shrunk[:3])))
+
+    inherited = tight_now & too_tight(was)
+    introduced = tight_now - inherited
+    out.append(CheckResult(
+        "행 높이 대 글자 크기", not introduced,
+        detail=f"{len(inherited)}행은 원본부터, 새로 생긴 것 없음" if not introduced
+        else f"{len(introduced)}행이 새로 글자보다 낮아졌다: "
+             + ", ".join(sorted(introduced)[:3])))
+    return out
+
+
 def check_layout(path: str | Path, *, min_pages: int = 1) -> list[CheckResult]:
     """자체 조판 엔진(:mod:`hwpxkit.preview`)으로 배치를 검사한다.
 
@@ -380,6 +487,7 @@ def verify(path: str | Path, *, render: bool = True, min_pages: int = 1,
     report.add(check_markpen_pairs(path))
     report.add(check_binary_refs(path))
     report.add(check_cell_overflow(path))
+    report.add(*check_row_geometry(path, baseline))
     if baseline is not None:
         report.add(*check_against_baseline(path, baseline))
     if render:
