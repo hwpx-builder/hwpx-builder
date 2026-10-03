@@ -153,17 +153,26 @@ def set_spans(doc, paragraph, spans: Sequence[Span]) -> None:
     add_spans(doc, paragraph, spans)
 
 
-def parse_markup(text: str, **base) -> list[Span]:
+def parse_markup(text: str, *, humanize: bool = True, **base) -> list[Span]:
     """아주 작은 인라인 마크업을 span 목록으로 파싱한다.
 
     ``**텍스트**`` 는 굵게, ``==텍스트==`` 는 노란 형광펜. ``**==텍스트==**`` 처럼
     겹쳐 쓸 수 있다. 나머지는 전부 문자 그대로이고 이스케이프 문법은 없다.
     생성된 내용을 다룰 때 파서가 예측 가능하도록 일부러 단순하게 두었다.
 
+    *humanize* (기본 참)는 사람이 치지 않는 문장부호를 바꾼다 — 줄표 ``—`` 는
+    ``-``, 낱말 사이 가운뎃점 ``·`` 은 ``/`` (:func:`hwpxkit.prose.humanize_punct`).
+    BoxDoc 과 ``set_cell``/``fill_cell`` 이 모두 이 함수를 거치므로 새로 쓰는 글
+    전체에 적용된다. 원문 표기를 그대로 옮겨야 할 때만 끈다.
+
     키워드 인자는 만들어지는 모든 span 의 기본 서식이 된다 (예: ``size=10``).
     """
     import re
 
+    if humanize:
+        from .prose import humanize_punct
+
+        text = humanize_punct(text)
     spans: list[Span] = []
     pattern = re.compile(r"(\*\*==.+?==\*\*|==\*\*.+?\*\*==|\*\*.+?\*\*|==.+?==)")
     for chunk in pattern.split(text):

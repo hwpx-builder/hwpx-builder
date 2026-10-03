@@ -331,6 +331,58 @@ def _java_available() -> bool:
     return shutil.which("java") is not None
 
 
+_BIN_REF = re.compile(r'(binaryItemIDRef=")([^"]+)(")')
+
+
+def _unique_bin_ids(src: Path, staged: Path) -> Path:
+    """그림 id 의 숫자 부분이 겹치면 겹치지 않게 다시 매긴 사본을 돌려준다.
+
+    hwpConverter 는 ``binaryItemIDRef`` 에서 **숫자만** 뽑아 그림 번호로 쓴다
+    (SectionParser: ``replaceAll("[^0-9]", "")``). .hwp 양식을 변환하면 로고가
+    ``image1``·``image2`` 로 오고, 새로 넣은 그림은 ``BIN0001``·``BIN0002`` 가
+    되어 둘 다 1·2 번이 된다. 실측: 신분증·국세 증명서 그림이 양식 로고를
+    가리키고, 갈 곳 없는 BinData 2개는 한글 2010 이 열면서 버렸다. 구조 대조
+    (그림 9->9, BinData 9->9)는 개수만 세서 통과했다.
+
+    겹침이 없으면 원본을 그대로 쓴다.
+    """
+    with zipfile.ZipFile(src) as z:
+        hpf = z.read("Contents/content.hpf").decode("utf-8")
+        items = re.findall(r'<opf:item id="([^"]+)" href="(BinData/[^"]+)"', hpf)
+        # "0001" 과 "1" 은 같은 번호다 — 변환기는 parseInt 한다.
+        nums = [int(d) if (d := re.sub(r"\D", "", iid)) else 0 for iid, _ in items]
+        if len(set(nums)) == len(nums) and all(nums):
+            return src
+        rename = {iid: f"image{i}" for i, (iid, _) in enumerate(items, start=1)}
+        files = {href: f"BinData/{rename[iid]}{Path(href).suffix}"
+                 for iid, href in items}
+
+        def sub_hpf(text: str) -> str:
+            def item(m):
+                iid, href = m.group(1), m.group(2)
+                if iid not in rename:
+                    return m.group(0)
+                return m.group(0).replace(f'id="{iid}"', f'id="{rename[iid]}"', 1) \
+                                 .replace(f'href="{href}"', f'href="{files[href]}"', 1)
+            return re.sub(r'<opf:item id="([^"]+)" href="([^"]+)"[^>]*>', item, text)
+
+        with zipfile.ZipFile(staged, "w") as out:
+            for info in z.infolist():
+                data = z.read(info)
+                name = info.filename
+                if name in files:
+                    info = zipfile.ZipInfo(files[name], info.date_time)
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                elif name == "Contents/content.hpf":
+                    data = sub_hpf(data.decode("utf-8")).encode("utf-8")
+                elif name.endswith(".xml") and b"binaryItemIDRef" in data:
+                    data = _BIN_REF.sub(
+                        lambda m: m.group(1) + rename.get(m.group(2), m.group(2)) + m.group(3),
+                        data.decode("utf-8")).encode("utf-8")
+                out.writestr(info, data)
+    return staged
+
+
 def _export_jar_route(src: Path, dest: Path, *, timeout: int) -> None:
     """HWPX -> HWP with hwpConverter (Java, no Hancom). Raises on failure.
 
@@ -347,9 +399,10 @@ def _export_jar_route(src: Path, dest: Path, *, timeout: int) -> None:
     stage.mkdir(parents=True)
     try:
         staged_out = stage / "out.hwp"
+        jar_src = _unique_bin_ids(src, stage / "in.hwpx")
         try:
             proc = subprocess.run(
-                ["java", "-cp", cp, _JAR_MAIN, str(src), str(staged_out)],
+                ["java", "-cp", cp, _JAR_MAIN, str(jar_src), str(staged_out)],
                 capture_output=True, timeout=timeout,
             )
         except subprocess.TimeoutExpired:

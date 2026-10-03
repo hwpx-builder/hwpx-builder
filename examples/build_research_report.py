@@ -52,7 +52,8 @@ def _figure(b: BoxDoc, path: Path, caption: str, missing: str,
 def build(out_path: str) -> str:
     doc = HwpxDocument.new()
     apply_u300_page(doc)   # U300 양식 지오메트리 — 표 폭과 본문 폭 일치
-    b = BoxDoc(doc)
+    # bold_figures: 본문 글줄의 숫자를 자동으로 굵게 — 심사자는 굵은 글자만 훑는다.
+    b = BoxDoc(doc, bold_figures=True)
 
     # ------------------------------------------------------------- 제목 --
     b.title("펭귄 3종의 형태 측정값을 이용한 종 판별")
@@ -65,7 +66,7 @@ def build(out_path: str) -> str:
     b.section_heading("0. 결론 요약 / Headline Finding")
     b.label_value_box([
         ("□ 연구 질문 / Question",
-         "부리·날개·체중 같은 형태 측정값만으로 아델리·턱끈·젠투 3종을 "
+         "부리/날개/체중 같은 형태 측정값만으로 아델리/턱끈/젠투 3종을 "
          "가를 수 있는가?"),
         ("□ 결론 / Conclusion",
          "**측정값 하나로는 불가능하다.** 네 측정값 모두 세 종의 범위가 서로 "
@@ -89,7 +90,7 @@ def build(out_path: str) -> str:
     b.container_box([
         ("□ 구성 / Composition", [
             "남극 Palmer Archipelago 3개 섬에서 관측된 펭귄 344개체. "
-            "측정값 4종(부리 길이·부리 깊이·날개 길이·체중)과 성별·관측 연도가 "
+            "==측정값 4종(부리 길이/부리 깊이/날개 길이/체중)과 성별/관측 연도==가 "
             "함께 기록되어 있다.",
             "※ 측정값에 결측이 있는 2개체는 분석에서 제외했다(342개체 사용). "
             "성별 결측 11건은 성별을 쓰지 않는 분석이므로 그대로 두었다.",
@@ -120,7 +121,7 @@ def build(out_path: str) -> str:
     b.container_box([
         ("□ 측정값 요약 (평균 ± 표준편차) / Summary by Species", [
             "젠투는 부리가 얕고(15.0 mm) 날개가 길며(217.2 mm) 무겁다(5076 g). "
-            "아델리와 턱끈은 부리 깊이·체중이 거의 같아서, ==둘을 가르는 것은 "
+            "아델리와 턱끈은 부리 깊이/체중이 거의 같아서, ==둘을 가르는 것은 "
             "부리 길이==뿐이다(38.8 vs 48.8 mm).",
             Grid(
                 headers=["측정값", "아델리", "턱끈", "젠투"],
@@ -168,13 +169,13 @@ def build(out_path: str) -> str:
         ]),
         ("□ 2변수 규칙 / A Two-Variable Rule", [
             "네 측정값에서 두 개를 고르고 임계값을 각각 60구간으로 나누어 전수 "
-            "탐색했다. 최적 조합은 **부리 깊이 + 부리 길이**였다.",
-            "· 1단계 — 부리 깊이 < 16.5 mm 이면 **젠투**",
-            "· 2단계 — 그 외에서 부리 길이 < 44.9 mm 이면 **아델리**, 아니면 **턱끈**",
+            "탐색했다. 최적 조합은 **==부리 깊이 + 부리 길이==**였다.",
+            "· 1단계 - 부리 깊이 < 16.5 mm 이면 **젠투**",
+            "· 2단계 - 그 외에서 부리 길이 < 44.9 mm 이면 **아델리**, 아니면 **턱끈**",
             Grid(
                 headers=["두 번째 변수", "정확도", "최적 대비"],
                 rows=[
-                    ["부리 길이", "93.0%", "—"],
+                    ["부리 길이", "93.0%", "-"],
                     ["날개 길이", "79.2%", "-13.8%p"],
                     ["체중", "76.3%", "-16.7%p"],
                 ],
@@ -182,8 +183,8 @@ def build(out_path: str) -> str:
             ),
         ]),
         ("□ 혼동행렬 / Confusion Matrix", [
-            "행이 실제 종, 열이 규칙의 예측이다. 세 종 모두 재현율이 90% 안팎으로 "
-            "고르다. 특정 종만 잘 맞히는 식의 편향은 없다.",
+            "행이 실제 종, 열이 규칙의 예측이다. ==세 종 모두 재현율이 90% 안팎으로 "
+            "고르다.== 특정 종만 잘 맞히는 식의 편향은 없다.",
             Grid(
                 headers=["실제 \\ 예측", "아델리", "턱끈", "젠투", "재현율"],
                 rows=[
@@ -202,25 +203,25 @@ def build(out_path: str) -> str:
     _figure(b, FIG1,
             "[그림 1] 부리 길이 × 부리 깊이. 점선은 3절의 두 임계값이다. "
             "가로선 아래가 젠투, 위쪽에서 세로선을 기준으로 아델리와 턱끈이 갈린다.",
-            "그림 1 (examples/images/fig1_bill.png) — "
+            "그림 1 (examples/images/fig1_bill.png) - "
             "examples/make_figures.py 로 생성")
     b.spacer()
     _figure(b, FIG2,
             "[그림 2] 날개 길이 × 체중. 젠투는 잘 떨어지지만 아델리와 턱끈이 "
             "거의 완전히 겹친다. 이 조합의 정확도가 79.2% 에 그치는 이유다.",
-            "그림 2 (examples/images/fig2_flipper.png) — "
+            "그림 2 (examples/images/fig2_flipper.png) - "
             "examples/make_figures.py 로 생성")
     b.spacer()
 
     # ------------------------------------------------------ 한계 --
-    b.section_heading("5. 한계 / Caveats — Do Not Over-claim")
+    b.section_heading("5. 한계 / Caveats - Do Not Over-claim")
     b.container_box([
         ("□ 섬 정보와의 교란 / Geographic Confounding", [
             "==이것이 가장 중요한 한계다.== 턱끈은 Dream 섬에서만, 젠투는 Biscoe "
-            "섬에서만 관측되었다. 즉 섬을 아는 것만으로도 상당한 판별이 가능하다. "
+            "섬에서만 관측되었다. 즉 섬만 알아도 3종 중 2종은 갈린다. "
             "본 분석은 형태만 사용했으므로 이 교란의 영향을 받지는 않지만, "
             "**여기서 얻은 93.0% 를 다른 지역에 그대로 적용할 수는 없다.** "
-            "세 종이 함께 서식하는 지역에서는 낮아질 가능성이 크다.",
+            "세 종이 함께 서식하는 지역에서 다시 재면 93.0% 아래로 내려간다고 보아야 한다.",
             Grid(
                 headers=["섬", "아델리", "턱끈", "젠투"],
                 rows=[
@@ -233,7 +234,7 @@ def build(out_path: str) -> str:
         ]),
         ("□ 그 밖의 유보 사항 / Other Limitations", [
             "· **검증 세트가 없다.** 임계값을 342개체 전체에서 찾고 같은 342개체로 "
-            "정확도를 쟀다. 즉 93.0% 는 낙관적인 추정치다. 학습/검증을 나누면 "
+            "정확도를 쟀다. ==즉 93.0% 는 낙관적인 추정치다.== 학습/검증을 나누면 "
             "낮아진다.",
             "· **표본이 불균형하다.** 턱끈이 68개체로 아델리(151)의 절반 미만이다.",
             "· **성별을 쓰지 않았다.** 성별 이형성이 뚜렷하므로(2절), 성별을 "
@@ -247,7 +248,7 @@ def build(out_path: str) -> str:
     b.section_heading("6. 데이터 출처 / Data Provenance")
     b.label_value_box([
         ("□ 데이터셋 / Dataset",
-         "palmerpenguins — Palmer Archipelago (Antarctica) penguin data"),
+         "palmerpenguins - Palmer Archipelago (Antarctica) penguin data"),
         ("□ 수집 / Collected by",
          "Dr. Kristen Gorman, Palmer Station Long Term Ecological Research "
          "(LTER) Network"),

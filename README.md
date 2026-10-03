@@ -25,6 +25,7 @@ SB,SR 드림
 - [미리보기 · PNG · PDF](#미리보기--png--pdf)
 - [사진 공백 자동 조정](#사진-공백-자동-조정)
 - [검증](#검증--못-한-것은-못-했다고-한다)
+- [문장 검토 — AI 티 빼기](#문장-검토--ai-티-빼기)
 - [구식 .hwp 변환](#구식-hwp-변환)
 - [라이선스](#라이선스)
 - [이 도구의 범위](#이-도구의-범위)
@@ -302,10 +303,12 @@ print(f"축소한 사진 {report.adjusted}장")
   OK  markpen pairing: 31 begin / 31 end
   OK  binary refs: 6 ref(s)
   OK  cell overflow: no unbreakable overflow
+  OK  korean word wrap: 어절 단위 (KEEP_WORD 20/20 paraPr)
   OK  layout cache invalidated: all edited paragraphs re-flow
   ~   highlight renders: NOT VERIFIED (렌더러가 형광펜을 아예 무시한다)
   ~   line breaking / page count: NOT VERIFIED (새 파일에는 줄 캐시가 없다)
   ~   Hancom COM oracle: NOT VERIFIED (한글 2014 이상 필요)
+  FAIL prose review: 19 block(s): FIX 3, note 2 (no-highlight 2, cliche 1) — python -m hwpxkit.prose <file> 로 목록 확인
 ```
 
 고칠 때 `baseline=원본`을 넘기면 편집에만 해당하는 검사가 추가된다: 낡은 줄
@@ -347,6 +350,39 @@ jar (Apache-2.0, Java 8+ — 한글 불필요, 표·이미지·형광펜을 실�
 으로 알려준다) ② 한글 2014+ COM `SaveAs` ③ 한글 2010 COM + CP949 HTML
 (최후 수단 — 레이아웃이 많이 깨진다). 변환마다 결과 .hwp 를 다시 읽어 텍스트
 토큰 보존율을 보고하며, 100% 미만은 의심하고 열어 봐야 한다.
+
+---
+
+## 문장 검토 — AI 티 빼기
+
+구조는 검사로 잡히지만 문장은 아니다. 그리고 심사자가 읽는 건 문장이다.
+`hwpxkit.prose` 가 기계로 잡히는 것 — 상투어(다양한·효과적으로·이를 통해),
+숫자 없는 주장, 빠져나가는 어미(기대된다), "A, B, C 등", 그리고 **강조가 없어서
+어디를 읽어야 할지 모르는 칸** — 을 잡고, `verify()` 의 `prose review` 줄이
+FIX 가 남아 있으면 빨간불을 낸다. 나머지는 사람이 다시 읽는다.
+
+```python
+from hwpxkit import review_blocks, BoxDoc
+
+for f in review_blocks(content):     # 만들기 전에, 내용 구조 그대로
+    print(f)                          # FIX [1. 문제/배경] cliche: '다양한' — 무엇이 몇 가지인지 쓴다
+b = BoxDoc(doc, bold_figures=True)    # 본문 숫자는 자동으로 굵게
+```
+
+```bash
+python -m hwpxkit.prose out.hwpx          # 칸별 지적 목록
+python -m hwpxkit.prose out.hwpx --dump   # 다시 읽기용 평문 (강조 마크업 포함)
+```
+
+굵게와 형광펜은 후하게 쓴다. 심사자는 굵은 글자와 형광펜을 먼저 훑고 관심이
+가는 칸만 읽는다. 숫자·고유명사·문단의 핵심은 굵게, 칸마다 기억해야 할 한 문장은
+형광펜. 없어도 걸리고 절반을 넘어도 걸린다. 절차와 문체 표는
+[`references/writing.md`](references/writing.md).
+
+한글 줄 나눔도 여기서 바로잡았다. 새 문서는 한/글 기본값인 글자 단위라 좁은
+칸에서 "실 / 험"처럼 갈라지고, 폴라리스 오피스처럼 글꼴이 다른 뷰어에서는 더
+어색하게 갈라진다. 이제 `BoxDoc` 이 **어절 단위**(`KEEP_WORD`)로 만들고 행
+높이도 같은 기준으로 잰다. 양식을 채울 때는 `keep_korean_words(doc)`.
 
 ---
 

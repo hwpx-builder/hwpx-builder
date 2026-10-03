@@ -31,6 +31,7 @@ HP_NS_TAG = HP
 BODY_PT = 10.0        # height=1000. 두 실측 문서 모두에서 본문 크기의 최빈값
 HEADING_PT = 13.0
 TITLE_PT = 16.0
+SOURCE_PT = 8.5       # 그림 출처 줄. 본문보다 작고 캡션과 구분된다
 
 GREY_HEADER = "#F2F2F2"   # container_box 의 라벨 행
 GREY_TABLE = "#D9D9D9"    # content_table 의 머리글 행
@@ -49,11 +50,18 @@ class Img:
     조용히 건너뛰면 빠진 줄도 모른다.
 
     *height_mm* 을 비우면 실제 종횡비로 계산한다.
+
+    *source* 는 그림 아래 작은 글씨 "출처: …" 줄이 된다. 남의 그림(논문
+    figure, 기사 캡처, 특허 도면)에는 반드시 단다. *crop* 은 원본에서 쓸 부분
+    ``(왼, 위, 오른, 아래)`` — 모두 1 이하면 비율, 아니면 픽셀이다. 기사 캡처의
+    광고·메뉴, 논문 figure 의 다른 패널을 잘라 낼 때 쓴다(Pillow 필요).
     """
     path: "str | Path"
     width_mm: float = 105.0
     height_mm: float | None = None
     caption: str = ""
+    source: str = ""
+    crop: "tuple[float, float, float, float] | None" = None
 
 
 @dataclass
@@ -72,10 +80,24 @@ class Grid:
 
 @dataclass
 class BoxDoc:
-    """작성 중인 문서. A4 기준 페이지 기하를 쓴다."""
+    """작성 중인 문서. A4 기준 페이지 기하를 쓴다.
+
+    *keep_words* (기본 참)는 한글 줄 나눔을 **어절 단위**로 둔다.
+    ``HwpxDocument.new()`` 스켈레톤은 한/글 기본값인 글자 단위
+    (``BREAK_WORD``)라, 좁은 칸에서 "실험"이 "실 / 험"으로 갈라진다. 한컴이
+    만든 배포 양식의 본문 문단은 전부 어절 단위이고, 글꼴 폭이 다른 뷰어
+    (폴라리스 오피스 등)에서는 글자 단위 끊김이 훨씬 자주, 더 어색한 자리에서
+    난다. 행 높이도 같은 기준으로 잰다(:mod:`hwpxkit.wrap`).
+
+    *bold_figures* 가 참이면 본문 글줄의 숫자(``93.0%``, ``318/342``,
+    ``3개월``)를 자동으로 굵게 한다 — 표 칸과 라벨은 제외. 심사자가 훑어
+    읽을 때 눈이 멈추는 자리를 숫자로 만들기 위한 것이다.
+    """
 
     doc: object
     width: int = 0
+    keep_words: bool = True
+    bold_figures: bool = False
 
     def __post_init__(self):
         # 본문 폭은 문서의 실제 페이지 여백에서 읽는다. 예전에는 U300 상수
@@ -84,6 +106,18 @@ class BoxDoc:
         # preview 렌더러가 발굴하기 전까지 아무 도구도 이를 보지 못했다.
         if not self.width:
             self.width = _doc_body_width(self.doc) or body_width()
+        if self.keep_words:
+            from .edit import keep_korean_words
+
+            keep_korean_words(self.doc)
+
+    def _markup(self, text: str) -> str:
+        """본문 글줄에 적용하는 자동 강조."""
+        if self.bold_figures:
+            from .prose import bold_figures
+
+            return bold_figures(text)
+        return text
 
     # ------------------------------------------------------------- 텍스트 --
 
@@ -92,6 +126,8 @@ class BoxDoc:
         """본문 문단을 덧붙인다. ``**굵게**`` 와 ``==형광펜==`` 을 지원한다."""
         para = self.doc.add_paragraph("")
         if markup:
+            if not bold:
+                markup = self._markup(markup)
             set_spans(self.doc, para, parse_markup(markup, size=size, bold=bold))
         return para
 
@@ -120,8 +156,8 @@ class BoxDoc:
         _set_column_widths(table, widths)
         for row, (label, value) in enumerate(pairs):
             self._fill_cell(table, row, 0, label, bold=True, shade=GREY_HEADER)
-            self._fill_cell(table, row, 1, value)
-        autofit(table)
+            self._fill_cell(table, row, 1, self._markup(value))
+        autofit(table, keep_words=self.keep_words)
         make_splittable(table)
         return table
 
@@ -138,7 +174,7 @@ class BoxDoc:
         for i, (label, content) in enumerate(blocks):
             self._fill_cell(table, i * 2, 0, label, bold=True, shade=GREY_HEADER)
             self._fill_content(table, i * 2 + 1, 0, content)
-        autofit(table)
+        autofit(table, keep_words=self.keep_words)
         make_splittable(table)
         return table
 
@@ -150,6 +186,31 @@ class BoxDoc:
         # 중첩 표는 자기만의 앵커 문단이 필요하므로, 텍스트와 표를 한꺼번에
         # 몰아 넣지 않고 순서대로 내보낸다.
         for item in content:
+            if isinstance(item, Img):
+                from .edit import set_align
+                from .units import mm
+
+                path = Path(item.path)
+                if not path.exists():
+                    raise FileNotFoundError(f"그림 파일이 없다: {path}")
+                from hwpx._document.media import add_image
+
+                data, fmt = image_bytes(path, item.crop)
+                width = mm(item.width_mm)
+                height = (mm(item.height_mm) if item.height_mm is not None
+                          else round(width * _aspect_ratio(data, path)))
+                para = existing[used] if used < len(existing) else cell.add_paragraph("")
+                used += 1
+                set_align(self.doc, para, "CENTER", left=0, intent=0)
+                para.add_picture(str(add_image(self.doc, data, fmt)),
+                                 width=width, height=height, align="CENTER")
+                text = caption_line(item.caption, item.source)
+                if text:
+                    para = cell.add_paragraph("")
+                    set_spans(self.doc, para, parse_markup(
+                        text, size=BODY_PT if item.caption else SOURCE_PT))
+                    set_align(self.doc, para, "CENTER", left=0, intent=0)
+                continue
             if isinstance(item, Grid):
                 # 칸을 꽉 채운다. 예전에는 0.96 을 썼는데, 남는 4% 가 표 오른쪽에
                 # 빈 띠로 보인다(48190 기준 약 1900 HWPUNIT, 6.8 mm).
@@ -167,7 +228,8 @@ class BoxDoc:
             else:
                 para = existing[used] if used < len(existing) else cell.add_paragraph("")
                 used += 1
-                set_spans(self.doc, para, parse_markup(str(item), size=BODY_PT))
+                set_spans(self.doc, para,
+                          parse_markup(self._markup(str(item)), size=BODY_PT))
 
     def content_table(self, headers: Sequence[str], rows: Sequence[Sequence[str]],
                       ratios: Sequence[float] | None = None,
@@ -189,7 +251,7 @@ class BoxDoc:
         for r, row in enumerate(rows, start=1):
             for c, cell in enumerate(row):
                 self._fill_cell(table, r, c, cell)
-        autofit(table)
+        autofit(table, keep_words=self.keep_words)
         make_splittable(table)
         if repeat_header:
             set_repeat_header(table)
@@ -206,21 +268,42 @@ class BoxDoc:
     # ------------------------------------------------------------- 이미지 --
 
     def picture(self, image_path: str | Path, *, width_mm: float = 150,
-                height_mm: float | None = None):
+                height_mm: float | None = None, crop=None):
         """이미지를 넣는다. 높이는 실제 종횡비에서 계산한다.
 
         여섯 개 기하값(``sz``/``orgSz``/``curSz``/``imgRect``/``imgClip``/
         ``imgDim``)은 ``add_picture`` 가 서로 맞춰서 써 준다. ``<hp:pic>`` 을
-        직접 조립하지 말 것.
+        직접 조립하지 말 것. *crop* 은 :class:`Img` 와 같다 — 잘라 낸 픽셀로
+        새 그림을 만든다(``imgClip`` 으로 자르면 .hwp 변환에서 틀어진다).
         """
-        path = Path(image_path)
-        data = path.read_bytes()
-        fmt = path.suffix.lstrip(".").lower() or "png"
+        data, fmt = image_bytes(image_path, crop)
         if height_mm is None:
-            height_mm = width_mm * _aspect_ratio(data, path)
+            height_mm = width_mm * _aspect_ratio(data, Path(image_path))
         return self.doc.add_picture(
             data, fmt, width_mm=width_mm, height_mm=height_mm, align="CENTER"
         )
+
+    def figure(self, image_path: str | Path, *, width_mm: float = 150,
+               caption: str = "", source: str = "", crop=None,
+               height_mm: float | None = None):
+        """그림 + 캡션 + 출처 줄. 남의 그림을 넣을 때는 이것을 쓴다.
+
+        그림 바로 아래 가운데에 ``[그림 1] 제목 (출처: …)`` 한 문단으로 쓴다.
+        캡션과 출처를 두 문단으로 나누면 출처 줄만 다음 쪽으로 떨어진다(미리보기
+        에서 실제로 그랬다). 캡션 번호("[그림 1]")는 호출자가 붙인다 — 문서마다
+        체계가 달라서다. 그림 지침은 SKILL.md "Figures" 절.
+        """
+        from .edit import set_align
+
+        pic = self.picture(image_path, width_mm=width_mm, height_mm=height_mm, crop=crop)
+        text = caption_line(caption, source)
+        if text:
+            # self.paragraph 를 쓰지 않는다 — bold_figures 가 출처의 연도까지 굵게 한다.
+            para = self.doc.add_paragraph("")
+            set_spans(self.doc, para,
+                      parse_markup(text, size=BODY_PT if caption else SOURCE_PT))
+            set_align(self.doc, para, "CENTER", left=0, intent=0)
+        return pic
 
     def image_placeholder(self, message: str):
         """이미지가 없을 때 눈에 보이는 빈칸을 남긴다.
@@ -340,14 +423,17 @@ def table_height(table) -> int:
     return total
 
 
-def autofit(table, font_pt: float = BODY_PT) -> int:
+def autofit(table, font_pt: float = BODY_PT, *, keep_words: bool = False) -> int:
     """모든 행을 내용에 맞게 키우고 표 전체 높이를 돌려준다.
 
     새로 만든 표는 행 높이가 고정이라, 긴 텍스트가 조용히 넘쳐서 옆 행과
     겹친다. 한글은 문서를 열 때 다시 배치하지만 여기서 쓸 수 있는 렌더러는
     그렇게 하지 않고, 넘치는 제출 문서는 어차피 결함이다. 줄 수는
-    ``hwpx.form_fit.measure`` 에서 얻는다. 이 모듈의 글자 폭은 실제 한글이
-    남긴 줄 캐시에 맞춰 보정돼 있다.
+    :mod:`hwpxkit.wrap` 에서 얻는다 — 글자 폭은 실제 한글이 남긴 줄 캐시에
+    맞춰 보정된 python-hwpx 표를 쓰고, 끊는 자리는 *keep_words* 를 따른다.
+    문서가 어절 단위(``KEEP_WORD``)인데 글자 단위로 재면 줄 수가 모자라
+    선언 높이를 그대로 믿는 뷰어에서 마지막 줄이 잘린다. :class:`BoxDoc` 은
+    자기 설정을 넘겨 준다.
 
     중첩 표를 먼저 재귀 처리한다. 바깥 행은 그 안의 표를 담을 만큼 높아야
     하기 때문이다.
@@ -355,7 +441,7 @@ def autofit(table, font_pt: float = BODY_PT) -> int:
     주의: **직접 만들지 않은 표에는 쓰지 말 것.** 병합 셀이 있는 표에서는
     행 높이 모델이 성립하지 않는다 (:func:`hwpxkit.edit.refit_cell` 참고).
     """
-    from hwpx.form_fit.measure import estimate_lines
+    from .wrap import estimate_lines
 
     pitch = int(font_pt * 100 * LINE_RATIO)
     total = 0
@@ -367,13 +453,14 @@ def autofit(table, font_pt: float = BODY_PT) -> int:
             for para in cell.paragraphs:
                 text = paragraph_text(para)
                 if text.strip():
-                    used += estimate_lines(text, inner, font_pt) * pitch
+                    used += estimate_lines(text, inner, font_pt,
+                                           keep_words=keep_words) * pitch
                 elif not _cell_tables(cell):
                     used += pitch
             for nested in _cell_tables(cell):
                 # 중첩 표는 자기 앵커 문단을 차지하고, 그 문단도 한 줄을
                 # 잡아먹는다. 이걸 빼먹으면 표의 마지막 행이 다음 행에 잘린다.
-                used += autofit(nested, font_pt) + pitch
+                used += autofit(nested, font_pt, keep_words=keep_words) + pitch
             needed = max(needed, used + 2 * CELL_PAD)
         for cell in row.cells:
             cell.set_size(height=needed)
@@ -402,6 +489,51 @@ def _set_column_widths(table, widths: Sequence[int]) -> None:
         for col, cell in enumerate(row.cells):
             if col < len(widths):
                 cell.set_size(width=widths[col])
+
+
+def caption_line(caption: str = "", source: str = "") -> str:
+    """``[그림 1] 제목 (출처: …)``. 둘 중 하나만 있으면 그것만."""
+    if source and not source.startswith("출처"):
+        source = f"출처: {source}"
+    if caption and source:
+        return f"{caption} ({source})"
+    return caption or source
+
+
+def image_bytes(path: "str | Path", crop=None) -> tuple[bytes, str]:
+    """그림 파일의 (바이트, 형식). *crop* 이 있으면 잘라 낸 PNG/JPEG 를 만든다.
+
+    *crop* = ``(왼, 위, 오른, 아래)``. 넷 다 1 이하면 비율, 아니면 픽셀.
+    """
+    path = Path(path)
+    data = path.read_bytes()
+    fmt = path.suffix.lstrip(".").lower() or "png"
+    if not crop:
+        return data, fmt
+    try:
+        import io
+
+        from PIL import Image
+    except ImportError as exc:                       # pragma: no cover
+        raise ImportError("crop 에는 Pillow 가 필요하다: pip install \".[images]\"") from exc
+    with Image.open(io.BytesIO(data)) as im:
+        w, h = im.size
+        if all(0 <= v <= 1 for v in crop):
+            box = (round(crop[0] * w), round(crop[1] * h),
+                   round(crop[2] * w), round(crop[3] * h))
+        else:
+            box = tuple(int(v) for v in crop)
+        if not (0 <= box[0] < box[2] <= w and 0 <= box[1] < box[3] <= h):
+            raise ValueError(f"crop {crop} 이 그림 {w}×{h} 밖이다")
+        out = im.crop(box)
+        buf = io.BytesIO()
+        if fmt in ("jpg", "jpeg"):
+            out.convert("RGB").save(buf, "JPEG", quality=92)
+            fmt = "jpg"
+        else:
+            out.save(buf, "PNG")
+            fmt = "png"
+    return buf.getvalue(), fmt
 
 
 def _aspect_ratio(data: bytes, path: Path) -> float:
@@ -513,8 +645,10 @@ def fit_rows(doc, table, *, ratio: float = LINE_RATIO, grow_only: bool = True) -
     ``verify(baseline=…)`` 의 "행 높이 축소" 검사와 짝이다 — 이걸 쓰면 그 검사가
     울릴 일이 없고, 울린다면 진짜 결함이다.
     """
-    from hwpx.form_fit.measure import estimate_lines
+    from .wrap import doc_keeps_words, estimate_lines
 
+    # 남의 양식은 대개 어절 단위다. 문서의 실제 기준으로 재야 행이 모자라지 않는다.
+    keep_words = doc_keeps_words(doc)
     total = 0
     for row in table.rows:
         needed = 0
@@ -533,7 +667,8 @@ def fit_rows(doc, table, *, ratio: float = LINE_RATIO, grow_only: bool = True) -
                     continue
                 text = paragraph_text(para)
                 if text.strip():
-                    used += estimate_lines(text, inner, pt) * pitch
+                    used += estimate_lines(text, inner, pt,
+                                           keep_words=keep_words) * pitch
                 elif not _cell_tables(cell):
                     used += pitch
             for nested in _cell_tables(cell):

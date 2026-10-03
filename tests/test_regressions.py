@@ -23,7 +23,9 @@ sys.path.insert(0, str(ROOT))
 
 #: 표본 문서가 있는 곳. 이 저장소 **밖**이다 — 남의 사업계획서라 커밋할 수 없다.
 #: 다른 기계에서는 ``HWPX_CORPUS`` 로 알려 주거나, 없으면 이 파일 전체를 건너뛴다.
-CORPUS = Path(os.environ.get("HWPX_CORPUS", "C:/hwpx"))
+#: 기본값은 저장소 안의 ``hwpx/`` (gitignore 됨), 없으면 예전 자리 ``C:/hwpx``.
+CORPUS = Path(os.environ.get("HWPX_CORPUS") or next(
+    (p for p in (ROOT / "hwpx", Path("C:/hwpx")) if p.is_dir()), Path("C:/hwpx")))
 ONLIVE = CORPUS / "온리브_사업계획서_배포용.hwp.hwpx"
 U300 = CORPUS / "[2차 진행] U300+ 사업계획서.hwp.hwpx"
 FORM = CORPUS / ("양식. 사업계획서(Business Plan, hwp)_2026 학생 창업유망팀 300+"
@@ -421,7 +423,7 @@ def test_black_bar_scenario() -> None:
     # 사고가 난 그 양식(대학리그)에는 15~17 pt 표제부가 있다. 없으면 U300 양식으로
     # 대신하는데, 그쪽은 본문이 12 pt 라 '글자보다 낮은 행' 쪽은 재현되지 않는다.
     real = next((p for p in (ROOT / "hanuel-bio" / "work").glob("form.hwpx")), None) \
-        or Path("C:/hwpx/next/hanuel-bio/work/form.hwpx")
+        or CORPUS / "next" / "hanuel-bio" / "work" / "form.hwpx"
     form = real if real is not None and real.exists() else FORM
     big_font = form is real
     dst = OUT / "blackbar.hwpx"

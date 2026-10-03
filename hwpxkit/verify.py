@@ -417,7 +417,12 @@ def check_row_geometry(path: str | Path,
     return out
 
 
-def check_layout(path: str | Path, *, min_pages: int = 1) -> list[CheckResult]:
+#: 마지막 쪽이 아닌 쪽이 본문 높이의 이 비율도 못 채우면 "빈 공간" 으로 본다.
+MIN_PAGE_FILL = 0.6
+
+
+def check_layout(path: str | Path, *, min_pages: int = 1,
+                 max_pages: int | None = None) -> list[CheckResult]:
     """자체 조판 엔진(:mod:`hwpxkit.preview`)으로 배치를 검사한다.
 
     rhwp 와 달리 lineseg 캐시를 재생하지 않고 직접 조판하므로, **캐시가 없는
@@ -438,9 +443,38 @@ def check_layout(path: str | Path, *, min_pages: int = 1) -> list[CheckResult]:
     except Exception as exc:
         return [CheckResult("layout engine", False, detail=f"조판 실패: {exc}")]
 
+    fill = info.get("page_fill") or []
+    last = f", 마지막 쪽 {fill[-1]:.0%}" if fill else ""
     out.append(CheckResult(
         "layout renders", info["pages"] >= min_pages,
-        detail=f"{info['pages']} page(s), 자체 조판 (한컴 대비 ±1쪽 가능)"))
+        detail=f"{info['pages']} page(s){last}, 자체 조판 (한컴 대비 ±1쪽 가능)"))
+
+    # 쪽수 제한 ("1페이지 내외", "5쪽 이내"). 엔진이 ±1쪽 틀릴 수 있으므로
+    # 경계에 걸리면 detail 에 적는다 — 통과여도 마지막 쪽이 거의 찼으면
+    # 한컴에서 넘칠 수 있다.
+    if max_pages is not None:
+        n = info["pages"]
+        if n > max_pages:
+            hint = (f"마지막 쪽 {fill[-1]:.0%} — 그만큼만 줄이면 된다"
+                    if n - max_pages == 1 and fill else "분량을 줄인다")
+            detail = f"{n}쪽 > 제한 {max_pages}쪽: {hint}"
+        else:
+            edge = n == max_pages and fill and fill[-1] > 0.9
+            detail = f"{n}쪽 ≤ {max_pages}쪽" + (
+                f" — 마지막 쪽이 {fill[-1]:.0%} 라 한컴에서 넘칠 수 있다" if edge else "")
+        out.append(CheckResult("page limit", n <= max_pages, detail=detail))
+
+    # 쪽 중간의 빈 공간. 통째로 넘어가는 표/그림이 앞 쪽 아래를 비운다.
+    # 강제 쪽 나눔으로 끝난 쪽(표지, 붙임)은 의도한 것이라 뺀다.
+    forced = set(info.get("forced_breaks") or [])
+    sparse = [(i, f) for i, f in enumerate(fill[:-1], 1)
+              if f < MIN_PAGE_FILL and i not in forced]
+    out.append(CheckResult(
+        "page fill", not sparse,
+        detail=(f"마지막 쪽 말고는 모두 {MIN_PAGE_FILL:.0%} 이상 찼다" if not sparse
+                else "빈 공간이 큰 쪽: " + ", ".join(f"{i}쪽 {f:.0%}" for i, f in sparse[:5])
+                + " — 뒤의 큰 표/그림이 통째로 밀렸다. 그림을 줄이거나(fit_pictures), "
+                  "표를 나뉘게 하거나(make_splittable), 순서를 바꾼다")))
     out.append(CheckResult(
         "no empty pages", info["empty_pages"] == 0,
         detail="all pages carry content" if not info["empty_pages"]
@@ -474,24 +508,88 @@ def check_layout(path: str | Path, *, min_pages: int = 1) -> list[CheckResult]:
     return out
 
 
+def check_word_wrap(path: str | Path) -> CheckResult:
+    """한글 줄 나눔 기준을 보고한다. 실패는 아니고 **알려 주는** 검사다.
+
+    ``BREAK_WORD`` (글자 단위)는 한/글 기본값이라 틀린 것은 아니지만, 좁은
+    칸에서 어절이 "실 / 험"처럼 갈라지고, 글꼴 폭이 다른 뷰어(폴라리스 오피스
+    등)에서는 그 자리가 더 자주, 더 어색하게 난다. 새로 만드는 문서는
+    :class:`hwpxkit.boxdoc.BoxDoc` 이 어절 단위로 두고, 남의 양식은
+    :func:`hwpxkit.edit.keep_korean_words` 로 바꿀 수 있다.
+    """
+    import xml.etree.ElementTree as _ET
+
+    try:
+        with zipfile.ZipFile(path) as z:
+            header = _ET.fromstring(z.read("Contents/header.xml"))
+    except Exception as exc:
+        return CheckResult("korean word wrap", False, checked=False, detail=str(exc))
+    counts: dict[str, int] = {}
+    for node in header.iter(f"{HH}breakSetting"):
+        v = node.get("breakNonLatinWord", "BREAK_WORD")
+        counts[v] = counts.get(v, 0) + 1
+    keep = counts.get("KEEP_WORD", 0)
+    total = sum(counts.values())
+    if total and keep == total:
+        return CheckResult("korean word wrap", True,
+                           detail=f"어절 단위 (KEEP_WORD {keep}/{total} paraPr)")
+    return CheckResult(
+        "korean word wrap", True,
+        detail=f"글자 단위 paraPr {total - keep}/{total} — 좁은 칸에서 어절이 갈라진다; "
+               f"keep_korean_words(doc) 로 어절 단위로")
+
+
+def check_prose(path: str | Path, *, mode: str = "pitch",
+                register: str | None = None) -> CheckResult:
+    """문장 검토(:mod:`hwpxkit.prose`). 상투어·숫자 없는 주장·강조 없는 칸.
+
+    FIX 항목이 하나라도 있으면 실패다 — 구조가 멀쩡해도 심사자가 읽는 것은
+    문장이고, 고치지 않고 넘어가는 것을 막으려면 결과 줄이 빨간불이어야 한다.
+    자세한 목록은 ``python -m hwpxkit.prose <file>``.
+    """
+    from .prose import review_document
+
+    try:
+        rep = review_document(path, mode=mode, register=register)
+    except Exception as exc:
+        return CheckResult("prose review", False, checked=False, detail=str(exc))
+    detail = rep.summary()
+    if not rep.ok:
+        detail += " — python -m hwpxkit.prose <file> 로 목록 확인"
+    return CheckResult("prose review", rep.ok, detail=detail)
+
+
 def verify(path: str | Path, *, render: bool = True, min_pages: int = 1,
-           baseline: str | Path | None = None) -> Report:
+           max_pages: int | None = None, baseline: str | Path | None = None,
+           prose: bool = True, mode: str = "pitch",
+           register: str | None = None) -> Report:
     """가능한 모든 층을 돌려서 보고서 하나로 돌려준다.
 
     편집을 시작한 원본 파일을 *baseline* 으로 넘기면, 편집에만 존재하는
     검사들이 추가된다. 바뀐 문단의 낡은 레이아웃 캐시, 편집 범위, 원본 대비
     형광펜 균형이다.
+
+    *prose* (기본 참)는 문장 검토를 함께 돌린다. 남이 쓴 양식의 안내문까지
+    검토하고 싶지 않을 때만 끈다. *mode* (``"pitch"`` 지원서 / ``"research"``
+    연구/특허 검토)와 *register* (``"합니다"`` / ``"한다"`` / ``"개조식"``)는
+    :func:`hwpxkit.prose.review_text` 로 그대로 간다.
+
+    *max_pages* 는 양식의 쪽수 제한("1페이지 내외", "5쪽 이내")이다. 주면
+    "page limit" 줄이 생긴다.
     """
     report = Report()
     report.add(*check_package(path))
     report.add(check_markpen_pairs(path))
     report.add(check_binary_refs(path))
     report.add(check_cell_overflow(path))
+    report.add(check_word_wrap(path))
     report.add(*check_row_geometry(path, baseline))
     if baseline is not None:
         report.add(*check_against_baseline(path, baseline))
     if render:
-        report.add(*check_layout(path, min_pages=min_pages))
+        report.add(*check_layout(path, min_pages=min_pages, max_pages=max_pages))
+    if prose:
+        report.add(check_prose(path, mode=mode, register=register))
     # 아래 항목은 여기서 쓸 수 있는 어떤 수단으로도 확인할 수 없다. 이름을
     # 붙여 두면 "안 봤다"가 "보니 괜찮더라"로 읽히지 않는다. (렌더 검사는
     # 자체 조판 엔진이 맡는다 — 예전 rhwp 기반의 NOT VERIFIED 두 줄은

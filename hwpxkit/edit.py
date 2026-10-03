@@ -653,7 +653,7 @@ def fill_cell(doc, cell, blocks: Sequence, *, keep_style: bool = True,
     문단은 건드리지 않는다.
     """
     from .boxdoc import (BODY_PT, GREY_TABLE, Grid, Img, _aspect_ratio,
-                         _set_column_widths)
+                         _set_column_widths, caption_line, image_bytes)
     from .units import mm, split_width
 
     report = report if report is not None else EditReport()
@@ -687,8 +687,7 @@ def fill_cell(doc, cell, blocks: Sequence, *, keep_style: bool = True,
                 raise FileNotFoundError(f"그림 파일이 없다: {path}")
             from hwpx._document.media import add_image
 
-            data = path.read_bytes()
-            fmt = path.suffix.lstrip(".").lower() or "png"
+            data, fmt = image_bytes(path, item.crop)
             width = mm(item.width_mm)
             height = (mm(item.height_mm) if item.height_mm is not None
                       else round(width * _aspect_ratio(data, path)))
@@ -696,10 +695,12 @@ def fill_cell(doc, cell, blocks: Sequence, *, keep_style: bool = True,
             para.add_picture(str(add_image(doc, data, fmt)),
                              width=width, height=height, align="CENTER")
             report.paragraphs += 1
-            if item.caption:
+            if item.caption or item.source:
+                # 캡션과 출처는 한 문단 — 나누면 출처 줄만 다음 쪽으로 떨어진다.
                 cap = _next(center=True)
-                _write_spans(doc, cap, parse_markup(f"< {item.caption} >"),
-                             base, color)
+                text = caption_line(f"< {item.caption} >" if item.caption else "",
+                                    item.source)
+                _write_spans(doc, cap, parse_markup(text), base, color)
                 report.paragraphs += 1
         elif isinstance(item, Grid):
             # 표는 앵커 문단 하나를 차지한다. 남은 문단이 없으면 새로 만든다.
@@ -1118,8 +1119,12 @@ class FitWarning:
 
 
 def refit_cell(ref: CellRef, *, font_pt: float = 10.0,
-               grow: bool = False) -> list[FitWarning]:
+               grow: bool = False, keep_words: bool = True) -> list[FitWarning]:
     """편집한 텍스트가 아직 들어가는지 확인하고, 원하면 행을 키운다.
+
+    *keep_words* 는 줄 수를 잴 때의 줄 나눔 기준이다. 기본값은 어절 단위 —
+    한컴이 만든 배포 양식의 본문 문단이 그렇다. ``BREAK_WORD`` 문서면 거짓을
+    넘긴다(:func:`hwpxkit.wrap.doc_keeps_words` 로 알 수 있다).
 
     캐시된 ``linesegarray`` 에는 편집 *이전*에 한글이 배치했던 줄 수가 들어
     있다. 표 전체를 다시 추정하는 것보다 훨씬 나은 기준선이다. 그런데 이 모듈의
@@ -1132,9 +1137,8 @@ def refit_cell(ref: CellRef, *, font_pt: float = 10.0,
     기본값은 보고만 하는 것이다. 캐시를 지워 두면 한글이 문서를 열 때 그 행을
     다시 배치하는데, 그게 여기서 계산하는 어떤 값보다 정확하다.
     """
-    from hwpx.form_fit.measure import estimate_lines
-
     from .boxdoc import CELL_PAD, LINE_RATIO
+    from .wrap import estimate_lines
 
     cell = ref.cell
     inner = max((cell.width or 0) - 2 * CELL_PAD, 1000)
@@ -1145,7 +1149,9 @@ def refit_cell(ref: CellRef, *, font_pt: float = 10.0,
         if not text.strip():
             continue
         was = cached_line_count(para)
-        now = estimate_lines(text, inner, font_pt)
+        # 배포 양식의 본문은 대개 어절 단위다. 캐시된 줄 수와 비교하는 값이므로
+        # 같은 기준으로 재야 "늘었다/안 늘었다"가 맞는다.
+        now = estimate_lines(text, inner, font_pt, keep_words=keep_words)
         if was is not None and now > was:
             extra_lines += now - was
             warnings.append(FitWarning(

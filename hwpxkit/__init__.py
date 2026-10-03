@@ -79,6 +79,21 @@ from .templates import (budget, business_model_canvas, competitor_matrix,
                         milestones, swot, tam_sam_som)
 from .units import A4_HEIGHT, A4_WIDTH, body_width, inch, mm, pt, split_width
 from .verify import Report, verify
+from .wrap import doc_keeps_words, estimate_lines
+
+#: 문장 검토는 지연 import 한다. ``python -m hwpxkit.prose`` 가 CLI 인데, 패키지가
+#: 먼저 하위 모듈을 import 해 두면 runpy 가 "이미 sys.modules 에 있다"고 경고한다.
+_PROSE_NAMES = {"Finding", "ProseReport", "bold_figures", "dump_text",
+                "review_blocks", "review_document", "review_text",
+                "humanize_punct", "is_identifier", "detect_register"}
+
+
+def __getattr__(name):
+    if name in _PROSE_NAMES:
+        from . import prose
+
+        return getattr(prose, name)
+    raise AttributeError(f"module 'hwpxkit' has no attribute {name!r}")
 
 __all__ = [
     "A4_HEIGHT", "A4_WIDTH", "BODY_PT", "BoxDoc", "CellRef", "EditReport",
@@ -102,4 +117,8 @@ __all__ = [
     # 분석 틀 템플릿
     "budget", "business_model_canvas", "competitor_matrix", "milestones",
     "swot", "tam_sam_som",
+    # 문장 검토 · 줄 나눔
+    "Finding", "ProseReport", "bold_figures", "dump_text", "review_blocks",
+    "review_document", "review_text", "humanize_punct", "is_identifier",
+    "detect_register", "doc_keeps_words", "estimate_lines",
 ]

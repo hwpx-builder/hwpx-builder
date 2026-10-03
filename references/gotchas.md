@@ -246,6 +246,29 @@ in both samples.
 📋 `<hp:lineBreak/>` vs. new paragraph is author-dependent: 65 uses in U300, zero
 in 온리브. Do not assume either.
 
+✅ **`HwpxDocument.new()` wraps Korean at any character (`BREAK_WORD`); Hancom
+forms use `KEEP_WORD` for body text.** Measured: U300's body paraPr (115+39+38
+paragraphs) and 양식's are `KEEP_WORD`; only label/heading paraPr are
+`BREAK_WORD`. Authored files had all 208 paragraphs on the skeleton's single
+`BREAK_WORD` paraPr, so narrow cells broke "실험" into "실 / 험". The user first
+saw it in Polaris Office, whose substitute fonts move the break points. `BoxDoc`
+now applies `keep_korean_words()` at construction, and
+`hwpxkit.wrap.estimate_lines(keep_words=)` replaces
+`hwpx.form_fit.measure.estimate_lines` (character-level only) wherever a row
+height or page count is computed — word-level wrapping needs more lines, and a
+viewer that trusts declared heights clips the last one. Character-level results
+are identical to python-hwpx's. Polaris rendering itself: ⚠️ not reproducible
+here (not installed) — keep the screenshot + file if it recurs.
+
+📋 **Prose review is a verify() check now.** It fails on `FIX` findings from
+`hwpxkit.prose` (clichés, unquantified claims, hedges, no/too-much emphasis,
+over-long sentences). Calibrated on the three examples plus one real submission:
+label rows, headings, captions, citation/contact cells and short-line label
+blocks are exempt — without that every grey label row came back as "100% 강조".
+Thresholds: sentence 100 chars, 개조식 line 150, emphasis ratio 0.5, highlights
+per cell 2. Nested `**` inside `==…==` prints literal asterisks: the markup parser
+is flat, write `**==…==**` or keep the highlight plain.
+
 ---
 
 ## Packaging
@@ -512,6 +535,14 @@ pre-existing vs newly introduced, the way `overflow introduced` does.
 
 ## Preview fidelity (미리보기가 거짓말하는 방식)
 
+✅ **The Python page estimate ignored `pageBreak="1"` paragraphs.** The browser
+paginator honoured them, the estimate did not — so `verify` counted fewer pages than
+the PDF (14 vs 16 on a lab report) and reported `picture push gaps` against the
+*previous* page's leftover space for pictures that actually sat under their heading
+on a fresh page. Two separate sessions wrote the false FAIL into a memo instead of
+fixing it. The estimate now breaks there too, and `render_html()["forced_breaks"]`
+lists pages ended on purpose so `page fill` does not flag a cover page.
+
 ✅ **The preview grew rows to fit text while paginating on declared heights.** HTML
 tables auto-grow, so a document with collapsed rows *looked* perfect in the PNG while
 the page count came from the (wrong) declared numbers. Looking at the render gave
@@ -532,6 +563,57 @@ paragraph sit side by side like glyphs (that is how you get a figure row without
 borderless table) — the preview drew one and counted one, so the layout could not be
 checked. Their row height is the **max**, not the sum.
 
+✅ **The PDF drew every run in one serif face.** `<hh:fontRef>` was never read, so a
+맑은 고딕 body and an HY헤드라인M title all came out as 함초롬바탕 (the PDF embedded
+only HCRBatang). `fontRef` ids index **per-language** lists (`<hh:fontface lang=…>`),
+so resolve latin and hangul separately. Quote font names but never the generics:
+`'sans-serif'` in quotes is a font called "sans-serif".
+
+✅ **자간 (`<hh:spacing>`) is a percentage of the glyph's *width*, not of the em.**
+Hangul glyphs are full-width, so −10% ≈ −0.1em; Latin letters are about half as wide.
+Copying the value straight into `letter-spacing` made a −25% English label in the
+startup-plan sample ("(One line Item Introduction)") collapse into overlapping
+letters. Latin-dominant runs use half the `latin` value.
+
+✅ **Chrome cannot use the 2002 HY fonts (HY헤드라인M, HY중고딕, HY견고딕).** They are
+installed and Windows lists them, but Chrome measures them exactly like a nonexistent
+font — by local name, by English name (`HYHeadLine-Medium`), and even embedded with
+`@font-face` (`status: error`, rejected by the font sanitizer). The preview maps
+headline faces to bold gothic; do not expect the exact face in a PDF.
+
+✅ **The drawn line height was not the estimated one, so pages overflowed their body.**
+Pagination estimated each paragraph at its own `lineSpacing` (150%), but the HTML drew
+every line at a fixed 160%. Worse, a unitless `line-height` multiplies the *div's* font
+size — the page default 16px — not the 11 pt span inside, so every table line grew by
+2px. Filled 12 pt form: page 5 spilled 44px into the bottom margin. Draw with the same
+ratio and set the div's `font-size` to the paragraph's size. `<td>` also ignores
+`min-height`; use `height` (a table cell treats it as a minimum).
+
+✅ **Chrome's 맑은 고딕 is wider than the Hangul metrics the estimate uses.** Even with
+matching line heights, a cell that wraps one line more than predicted pushes the page
+over. The HTML now carries a synchronous fit script that shrinks only an overflowing
+page's body (floor 0.92, logged to the console) before `--print-to-pdf` runs. A page
+that needs more than that means the estimate is wrong — fix the estimate, not the floor.
+
+✅ **Estimating in Python and drawing in Chrome is two typesetters — the PDF broke in
+the gap.** After line heights and fonts were matched, the filled 12 pt form still
+showed box-fragment borders stopping mid-page (the fragment's height came from the
+estimate, not its content), tables in boxes moving whole and leaving 25–40% of a page
+empty, and boxes ending open. The drawn output is now paginated in the browser by
+measurement (`hwpxkit/paginate.py`); the Python estimate only feeds the Hangul-like
+page count. Traps hit while writing it: `scrollHeight` never drops below
+`clientHeight` (compare the content's bottom edge instead); a keep-with-next carry
+loop that reads `lastElementChild` must *remove* it or it spins forever (Chrome hangs,
+`--print-to-pdf` times out); a split-off fragment must drop the source's
+`data-break`; and a fixed-layout table ignores `max-width` and uses the sum of its
+cell widths as its minimum — write cell widths as % and cap the table width instead.
+
+✅ **A heading could be stranded at the bottom of a page** while the nested table
+under it moved whole to the next page. When a container cell is split into page
+fragments, a one-line text block directly before a table or picture now moves with it.
+Blank-line padding does not work as a fix: the split uses *estimated* heights, so
+padding computed from the rendered PDF pushed the heading off the page instead.
+
 ---
 
 ## HWP export/import (.hwp 왕복)
@@ -551,6 +633,21 @@ Verify by scanning the records, and restore markpen from them when reading back.
 pictures) comes back with 13 BinData streams and every `<hc:img>` pointing at image 1 —
 the whole document looks like the same picture repeated. Prefer the hwpConverter jar
 for reading; it resolves them individually.
+
+✅ **hwpConverter numbers pictures by the digits in `binaryItemIDRef`.** `SectionParser`
+does `replaceAll("[^0-9]", "")` + `parseInt`, so a form converted from `.hwp` (logos
+`image1`, `image2`) plus pictures added by `add_image` (`BIN0001`, `BIN0002`) gives two
+pictures each number 1 and 2. 실측 (요건검토 서류): 신분증·국세 증명서가 양식 로고를
+가리켰고, 아무도 안 가리키는 BinData 2개는 한글 2010 이 열면서 버렸다. 사용자가 그
+파일에 서명을 넣고 저장하자 서명이 빈 번호 BIN0003 을 받았다. 구조 대조(그림 9->9,
+BinData 9->9)는 개수만 세서 **통과했다**. `to_hwp` 의 jar 경로가 이제 번호가
+겹치면 `image1..N` 으로 다시 매긴 사본을 변환한다(`_unique_bin_ids`).
+
+✅ **`open_any(.hwp)` can hand back undecoded BinData.** The same form's logos came
+back as raw-deflate bytes (BMP) and as garbage (PNG) under their original names — Hangul
+and the preview both draw an empty box. Check with `PIL.Image.open` before trusting a
+converted form's pictures; `hanuel-bio/build_yogeon.py:fix_logos` restores them from the
+OLE streams (PNG stored, BMP raw-deflate — try both).
 
 ✅ **Editing the ET tree directly does not mark the part dirty.** `python-hwpx` writes
 the untouched original bytes on save, so the repairs vanish with no error. Call

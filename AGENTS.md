@@ -23,16 +23,20 @@ from hwpx.document import HwpxDocument
 from hwpxkit import BoxDoc, Grid, fit_pictures, to_hwp, verify
 
 doc = HwpxDocument.new()
-b = BoxDoc(doc)
+b = BoxDoc(doc, bold_figures=True)   # 본문 숫자는 자동으로 굵게
 b.title("제목")
 b.section_heading("1. 절 제목")
 b.container_box([("라벨", ["내용 줄", Grid(headers=[...], rows=[...])])])
 b.content_table(["열1", "열2"], rows, repeat_header=True)  # 긴 표: 제목 줄 반복
 b.picture("사진.jpg", width_mm=100)
+b.figure("fig.png", caption="[그림 1] …", source="저자 2024", crop=(0, 0, 1, 0.8))
 doc.save_to_path("문서.hwpx")
 
 fit_pictures("문서.hwpx")            # 사진 밀림 공백 검사·축소 (비교 계열은 함께)
-print(verify("문서.hwpx").render())  # 저장 후 반드시. NOT VERIFIED 는 통과가 아니다
+for f in review_blocks(content, mode="pitch", register="합니다"): print(f)
+                                     # 만들기 전 문장 검토 — FIX 0 이 될 때까지
+print(verify("문서.hwpx", max_pages=5, register="합니다").render())
+                                     # 저장 후 반드시. NOT VERIFIED 는 통과가 아니다
 to_hwp("문서.hwpx")                  # 구버전 한글용 .hwp 내보내기 (SKILL.md 참조)
 ```
 
@@ -50,6 +54,18 @@ highlight_cell` 을 쓴다 — 원 라이브러리의 문단 단위 API 는 표 
 7. 직접 만들지 않은 표에 `autofit()` 을 돌리지 마라 (병합 셀에서 깨진다).
 8. python-hwpx 요소를 직접 변형했다면 `section.mark_dirty()` — 패치 저장이라
    표시 없는 변경은 조용히 버려진다.
+9. 문장 검토 루프를 돈다: `review_blocks` → `verify` 의 prose review →
+   `python -m hwpxkit.prose --dump` 로 다시 읽기. FIX 가 남으면 끝난 게 아니다
+   (`references/writing.md`).
+10. 강조는 후하게: 숫자·고유명사·핵심은 굵게, 칸마다 기억할 한 문장은 형광펜.
+    없어도, 절반을 넘어도 검사에 걸린다. 검사를 통과하려고 숫자를 지어내지 마라.
+11. 사람이 안 하는 선택을 하지 마라: 줄표 `—`, 낱말 사이 `·`, 특허·논문 번호 굵게,
+    편집 흔적("※ 수정", "이번 개정"). 문체는 한 문서에 하나(대개 합니다체), 연구·
+    특허 검토 글은 `mode="research"` 로 과잉 단정을 잡는다.
+12. 그림은 실물(논문 figure·기사 캡처·특허 도면)을 잘라서 출처와 함께
+    (`b.figure(..., source=, crop=)`). 개념 도식은 글로, 차트는 출처 있는 수치만.
+13. 작업 폴더(`hanuel-bio/`, `sdu/` …)에 `project.md` 가 있으면 먼저 읽고, 사용자가
+    사실을 바로잡으면 거기에 적어라.
 
 ## 자주 하는 작업 → 진입점
 

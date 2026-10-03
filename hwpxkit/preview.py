@@ -38,6 +38,30 @@ PX = 1 / 75          # 96dpi: 1px = 75 HWPUNIT
 LINE_RATIO = 1.6     # 한글 응용 기본 줄 간격 160%
 SAFETY = 800         # 시뮬레이션이 못 보는 소량 오차 (HWPUNIT)
 
+#: 브라우저가 실제로 배치한 뒤 쪽 본문이 넘치면 그 쪽만 줄여 담는 안전망.
+#: 쪽 나눔은 한/글 글자 폭으로 추정하는데 Chrome 의 글꼴(특히 맑은 고딕)은 조금
+#: 넓어서, 추정보다 한 줄 더 감기는 칸이 생기면 본문이 아래 여백으로 흘러내린다
+#: (PDF 에서 쪽 번호와 겹치거나 잘린다). 동기 실행이라 --print-to-pdf 전에 끝난다.
+#: 0.92 아래로는 줄이지 않고 콘솔에 남긴다 — 그 정도면 조판 추정이 틀린 것이다.
+_FIT_SCRIPT = """
+(function () {
+  for (const b of document.querySelectorAll('.page > .body')) {
+    const h = b.clientHeight, w = b.clientWidth;
+    let k = 1;
+    for (let i = 0; i < 6 && b.scrollHeight > b.clientHeight + 1 && k > 0.92; i++) {
+      k = Math.max(0.92, k * b.clientHeight / b.scrollHeight - 0.002);
+      b.style.zoom = k;
+      b.style.width = (w / k) + 'px';
+      b.style.height = (h / k) + 'px';
+    }
+    if (k < 1) {
+      b.dataset.fit = k.toFixed(3);
+      console.warn('hwpx preview: 쪽 본문 넘침 → ' + k.toFixed(3) + ' 배로 축소');
+    }
+  }
+})();
+"""
+
 
 def _px(v: float) -> str:
     return f"{v * PX:.1f}px"
@@ -52,10 +76,47 @@ class CharStyle:
     italic: bool = False
     underline: bool = False
     color: str = "#000000"
+    family: str = ""            # css font-family ("" 이면 문서 기본)
+    spacing: float = 0.0        # 한글 자간, 글자 크기 대비 비율 (-0.05 = -5%)
+    spacing_latin: float = 0.0  # 라틴 자간 — 한/글은 *글자 폭* 기준이라 em 의 약 절반
 
     @property
     def pt(self) -> float:
         return self.height / 100.0
+
+
+#: 한글 문서의 글꼴 이름 → 같은 글꼴의 영문 등록 이름. Chrome 은 로컬라이즈된
+#: 이름을 못 찾는 경우가 있어 둘 다 적는다 (HY헤드라인M 은 영문 이름으로만 잡힌다).
+_FONT_ALIASES = {
+    "함초롬바탕": "HCR Batang", "함초롬돋움": "HCR Dotum",
+    "맑은 고딕": "Malgun Gothic", "바탕": "Batang", "바탕체": "BatangChe",
+    "돋움": "Dotum", "돋움체": "DotumChe", "굴림": "Gulim", "굴림체": "GulimChe",
+    "궁서": "Gungsuh", "HY헤드라인M": "HYHeadLine-Medium",
+    "HY중고딕": "HYGothic-Medium", "HY견고딕": "HYGothic-Extra",
+    "HY신명조": "HYSinMyeongJo-Medium", "HY그래픽M": "HYGraphic-Medium",
+    "HY궁서B": "HYGungSo-Bold", "한컴 고딕": "Hancom Gothic",
+}
+#: Chrome 이 쓰지 못하는 제목용 글꼴. HY헤드라인M·HY견고딕(2002년판 TrueType)은
+#: 설치돼 있어도 Chrome 글꼴 검사기가 거부한다 — 로컬 이름으로도, @font-face 로
+#: 직접 넣어도 status=error. 없는 글꼴과 같은 폭으로 그려지니 제목이 본문처럼
+#: 가늘게 나온다. 굵은 고딕이 가장 가까운 대체다.
+_HEADLINE_HINT = re.compile(r"헤드라인|견고딕|HeadLine|Gothic-Extra", re.I)
+_SERIF_HINT = re.compile(r"명조|바탕|궁서|Batang|Myeong|Gungs|serif", re.I)
+
+
+def _font_family(*faces: str) -> str:
+    """글꼴 이름들 → css font-family. 없는 글꼴은 계열(명조/고딕)을 맞춰 대체."""
+    names: list[str] = []
+    for f in faces:
+        for n in (f, _FONT_ALIASES.get(f, "")):
+            if n and n not in names:
+                names.append(n)
+    serif = any(_SERIF_HINT.search(f) for f in faces if f)
+    fallback = (["HCR Batang", "함초롬바탕", "Batang", "serif"] if serif else
+                ["Malgun Gothic", "맑은 고딕", "HCR Dotum", "sans-serif"])
+    generic = {"serif", "sans-serif"}           # 따옴표로 감싸면 글꼴 이름이 된다
+    return ",".join(n if n in generic else f"'{n}'"
+                    for n in names + [x for x in fallback if x not in names])
 
 
 @dataclass
@@ -65,15 +126,39 @@ class Theme:
     spacing: dict[str, float] = field(default_factory=dict)   # paraPr id -> 줄간격 배수
     fill: dict[str, str] = field(default_factory=dict)        # borderFill id -> css color
     border: dict[str, dict[str, str]] = field(default_factory=dict)  # id -> side -> css
+    keep_words: bool = False    # 한글 줄 나눔이 어절 단위(KEEP_WORD)인가 — 줄 수 추정에 쓴다
 
 
 def _parse_theme(header_root) -> Theme:
     t = Theme()
+    # 언어별 글꼴 목록. fontRef 의 id 는 **언어마다 다른 목록**을 가리킨다.
+    faces: dict[str, dict[str, str]] = {}
+    for ff in header_root.iter(f"{_HH}fontface"):
+        lang = ff.get("lang", "").lower()
+        faces[lang] = {f.get("id"): f.get("face", "")
+                       for f in ff.findall(f"{_HH}font")}
     for cp in header_root.iter(f"{_HH}charPr"):
         cid = cp.get("id")
         if cid is None:
             continue
         st = CharStyle(height=int(cp.get("height", "1000")))
+        ref = cp.find(f"{_HH}fontRef")
+        if ref is not None:
+            latin = faces.get("latin", {}).get(ref.get("latin", ""), "")
+            hangul = faces.get("hangul", {}).get(ref.get("hangul", ""), "")
+            if latin or hangul:
+                # 라틴 글꼴을 먼저 — 한글 글리프가 없으면 브라우저가 다음 글꼴로 넘긴다.
+                st.family = _font_family(latin, hangul) if latin != hangul \
+                    else _font_family(hangul)
+            if _HEADLINE_HINT.search(hangul or latin):
+                st.bold = True
+        sp = cp.find(f"{_HH}spacing")
+        if sp is not None:
+            try:
+                st.spacing = int(sp.get("hangul", "0")) / 100
+                st.spacing_latin = int(sp.get("latin", "0")) / 100
+            except ValueError:
+                pass
         if cp.find(f"{_HH}bold") is not None:
             st.bold = True
         if cp.find(f"{_HH}italic") is not None:
@@ -153,6 +238,8 @@ def _runs_to_html(p_el, theme: Theme) -> tuple[str, str, float]:
         st = theme.char.get(run.get("charPrIDRef", ""), CharStyle())
         max_pt = max(max_pt, st.pt)
         css = [f"font-size:{st.pt}pt"]
+        if st.family:
+            css.append(f"font-family:{st.family}")
         if st.bold:
             css.append("font-weight:bold")
         if st.italic:
@@ -161,8 +248,16 @@ def _runs_to_html(p_el, theme: Theme) -> tuple[str, str, float]:
             css.append("text-decoration:underline")
         if st.color != "#000000":
             css.append(f"color:{st.color}")
-        span_open = f'<span style="{";".join(css)}">'
         for t in run.findall(f"{_HP}t"):
+            # 자간: 한/글의 % 는 글자 *폭* 기준이다. 한글은 전각(1em)이라 그대로,
+            # 라틴 글자는 폭이 약 0.5em 이라 절반으로. em 으로 그대로 옮기면 -25%
+            # 자간의 영문 라벨("(One line Item Introduction)")이 글자끼리 겹친다.
+            text = "".join(t.itertext())
+            latin = sum(c.isascii() and c.isalpha() for c in text)
+            hangul = sum("가" <= c <= "힣" for c in text)
+            ls = st.spacing_latin * 0.5 if latin > hangul else st.spacing
+            span_open = (f'<span style="{";".join(css)}'
+                         + (f';letter-spacing:{ls:.3f}em' if ls else "") + '">')
             buf: list[str] = [span_open]
             if mark_open:
                 buf.append('<mark>')
@@ -240,6 +335,8 @@ class Block:
     el: object = None
     #: 같은 문단에 나란히 놓인 그림들 (glyph 처럼 이어 붙는다). el 이 그 첫 장.
     siblings: list = None
+    #: 이 블록의 문단이 ``pageBreak="1"`` (쪽 나눔 뒤에서 시작) 인가.
+    brk: bool = False
 
 
 def _page_body(sec_root) -> tuple[int, int, dict[str, int]]:
@@ -252,51 +349,70 @@ def _page_body(sec_root) -> tuple[int, int, dict[str, int]]:
 
 
 def _blocks(sec_root, theme: Theme, body_w: int, imgs: dict[str, str]):
-    from hwpx.form_fit.measure import estimate_lines
+    from .wrap import estimate_lines
 
     for p in sec_root.findall(f"{_HP}p"):
         tbl = p.find(f"./{_HP}run/{_HP}tbl")
         pic = p.find(f"./{_HP}run/{_HP}pic")
+        brk = p.get("pageBreak") == "1"
         if tbl is not None:
-            sz = tbl.find(f"{_HP}sz")
-            yield Block("table", sum(_row_heights(tbl, theme, imgs)), tbl)
+            yield Block("table", sum(_row_heights(tbl, theme, imgs)), tbl, brk=brk)
         elif pic is not None:
             pics = list(p.iter(f"{_HP}pic"))
             height = max(int(x.find(f"{_HP}sz").get("height")) for x in pics)
-            yield Block("picture", height, pic, pics)
+            yield Block("picture", height, pic, pics, brk=brk)
         else:
             text = _para_plain(p)
             _, _, pt = _runs_to_html(p, theme)
             pitch = int(pt * 100 * _ratio(p, theme))
-            n = estimate_lines(text, body_w, pt) if text.strip() else 1
-            yield Block("text", n * pitch, p)
+            n = (estimate_lines(text, body_w, pt, keep_words=theme.keep_words)
+                 if text.strip() else 1)
+            yield Block("text", n * pitch, p, brk=brk)
 
 
 # -------------------------------------------------------------- 표 렌더링 --
+
+#: 셀 안쪽에서 중첩 표가 쓸 수 없는 폭 — td 좌우 여백(4px×2)과 테두리 (HWPUNIT)
+CELL_INSET = 750
+
 
 def _cell_html(tc, theme: Theme, imgs: dict[str, str]) -> str:
     parts = []
     sub = tc.find(f"{_HP}subList")
     if sub is None:
         return ""
+    csz = tc.find(f"{_HP}cellSz")
+    avail = int(csz.get("width")) - CELL_INSET if csz is not None else None
     for p in sub.findall(f"{_HP}p"):
         inner_tbl = p.find(f"./{_HP}run/{_HP}tbl")
         inner_pic = p.find(f"./{_HP}run/{_HP}pic")
         if inner_tbl is not None:
-            parts.append(_table_html(inner_tbl, theme, imgs, rows_slice=None))
+            parts.append(_table_html(inner_tbl, theme, imgs, rows_slice=None,
+                                     max_w=avail))
         elif inner_pic is not None:
             # 한 문단에 여러 장이면 글자처럼 나란히 놓인 것이다. 예전에는
             # 첫 장만 그려서, 나란히 배치가 미리보기로 검증되지 않았다.
             parts.append("".join(_pic_html(x, imgs) for x in p.iter(f"{_HP}pic")))
         else:
-            body, align, _ = _runs_to_html(p, theme)
-            parts.append(f'<div style="text-align:{align}">{body or "&nbsp;"}</div>')
+            body, align, pt = _runs_to_html(p, theme)
+            # 줄간격은 문단 자신의 값으로 — 쪽 나눔 추정(_row_heights)이 쓰는 값과
+            # 같아야 한다. 고정 160% 로 그리면 150% 문단이 줄마다 7% 커져서
+            # 쪽 본문 아래로 넘친다(12 pt 본문 문서에서 실측 +44px).
+            # font-size 도 문단 글자 크기로: 단위 없는 line-height 는 *div 자신의*
+            # 글자 크기(페이지 기본 16px)에 곱해져 11 pt 셀 글이 줄마다 2px 씩 커졌다.
+            parts.append(f'<div style="text-align:{align};font-size:{pt}pt;'
+                         f'line-height:{_ratio(p, theme)}">'
+                         f'{body or "&nbsp;"}</div>')
     return "".join(parts)
 
 
 def _table_html(tbl, theme: Theme, imgs: dict[str, str],
                 rows_slice: tuple[int, int] | None,
-                repeat_header_rows: list | None = None) -> str:
+                repeat_header_rows: list | None = None,
+                max_w: int | None = None) -> str:
+    """*max_w* (HWPUNIT): 이보다 넓게 그리지 않는다. 칸을 꽉 채운 중첩 표는 td 의
+    안쪽 여백만큼 칸 밖으로 삐져나왔다 — 고정 배치 표는 css max-width 를 무시하고
+    칸 폭(px)의 합을 최소 폭으로 쓰므로, 칸 폭을 % 로 바꾸고 표 폭을 줄인다."""
     trs = tbl.findall(f"{_HP}tr")
     lo, hi = rows_slice if rows_slice else (0, len(trs))
     render_rows = ([r for r in repeat_header_rows] if repeat_header_rows else []) \
@@ -305,7 +421,8 @@ def _table_html(tbl, theme: Theme, imgs: dict[str, str],
     # 이 조각에 걸치는 rowSpan 병합은 조각 안으로 잘라 그린다 (근사)
     sz = tbl.find(f"{_HP}sz")
     width = int(sz.get("width"))
-    out = [f'<table style="border-collapse:collapse;width:{_px(width)};'
+    drawn = min(width, max_w) if max_w else width
+    out = [f'<table style="border-collapse:collapse;width:{_px(drawn)};'
            f'table-layout:fixed" border="0">']
     for tr in render_rows:
         out.append("<tr>")
@@ -323,8 +440,8 @@ def _table_html(tbl, theme: Theme, imgs: dict[str, str],
                 border_css = [f"{k}:{v}" for k, v in sides.items()]
             else:
                 border_css = ["border:1px solid #666"]
-            style = border_css + [f"width:{_px(w)}",
-                     f"min-height:{_px(h)}", "padding:2px 4px",
+            style = border_css + [f"width:{w / width * 100:.3f}%",
+                     f"height:{_px(h)}", "padding:2px 4px",
                      "box-sizing:border-box",
                      "vertical-align:middle", "overflow:hidden"]
             if fill:
@@ -365,7 +482,7 @@ def _row_heights(tbl, theme: Theme, imgs: dict[str, str]) -> list[int]:
     높이엔 반영돼 있지 않아, 선언값만 믿으면 6쪽짜리가 3쪽으로 나온다.
     rowSpan 셀의 내용은 걸친 행들에 균등 분배한다 (근사).
     """
-    from hwpx.form_fit.measure import estimate_lines
+    from .wrap import estimate_lines
 
     trs = tbl.findall(f"{_HP}tr")
     n = len(trs)
@@ -402,7 +519,9 @@ def _row_heights(tbl, theme: Theme, imgs: dict[str, str]) -> list[int]:
                                                  CharStyle()).pt)
                                  for r in p_.findall(f"{_HP}run")) \
                             if p_.findall(f"{_HP}run") else 10.0
-                        lines = estimate_lines(text, inner_w, pt) if text.strip() else 1
+                        lines = (estimate_lines(text, inner_w, pt,
+                                                keep_words=theme.keep_words)
+                                 if text.strip() else 1)
                         content += int(lines * pt * 100 * _ratio(p_, theme))
             if content:
                 per = (content + 566) / rs
@@ -446,8 +565,12 @@ def _pic_html(pic, imgs: dict[str, str]) -> str:
 
 
 def _cell_blocks(tc, theme: Theme, imgs: dict[str, str], inner_w: int):
-    """셀 내용을 (높이, html) 블록 목록으로 — 초대형 행의 쪽 나눔용."""
-    from hwpx.form_fit.measure import estimate_lines
+    """셀 내용을 (높이, html, 종류) 블록 목록으로 — 초대형 행의 쪽 나눔용.
+
+    종류는 ``"text"`` / ``"table"`` / ``"pic"`` — 제목 줄을 뒤따르는 표·그림과
+    붙여 두는 판단에 쓴다.
+    """
+    from .wrap import estimate_lines
 
     out: list[tuple[int, str]] = []
     sub = tc.find(f"{_HP}subList")
@@ -459,18 +582,23 @@ def _cell_blocks(tc, theme: Theme, imgs: dict[str, str], inner_w: int):
         if inner_tbl is not None:
             sz = inner_tbl.find(f"{_HP}sz")
             out.append((int(sz.get("height")),
-                        _table_html(inner_tbl, theme, imgs, rows_slice=None)))
+                        _table_html(inner_tbl, theme, imgs, rows_slice=None),
+                        "table"))
         elif inner_pic is not None:
             pics = list(p.iter(f"{_HP}pic"))
             h = max(int(x.find(f"{_HP}sz").get("height")) for x in pics)
-            out.append((h, "".join(_pic_html(x, imgs) for x in pics)))
+            out.append((h, "".join(_pic_html(x, imgs) for x in pics), "pic"))
         else:
             body, align, pt = _runs_to_html(p, theme)
             pitch = int(pt * 100 * _ratio(p, theme))
             text = _para_plain(p)
-            n = estimate_lines(text, inner_w, pt) if text.strip() else 1
+            n = (estimate_lines(text, inner_w, pt, keep_words=theme.keep_words)
+                 if text.strip() else 1)
             out.append((n * pitch,
-                        f'<div style="text-align:{align}">{body or "&nbsp;"}</div>'))
+                        f'<div style="text-align:{align};font-size:{pt}pt;'
+                        f'line-height:{_ratio(p, theme)}">'
+                        f'{body or "&nbsp;"}</div>',
+                        "text" if n == 1 and text.strip() else "para"))
     return out
 
 
@@ -519,13 +647,28 @@ def _korean_word_break(header_root) -> str:
     return "keep-all" if dominant == "KEEP_WORD" else "normal"
 
 
-def render_html(src: str | Path, out: str | Path | None = None) -> dict:
+def render_html(src: str | Path, out: str | Path | None = None, *,
+                paginate: str = "browser") -> dict:
     """조판해서 자립 HTML 로. *out* 이 None 이면 결과 dict 의 "html" 로 반환.
 
+    *paginate* — 그려진 HTML 의 쪽을 누가 나누나:
+
+    - ``"browser"`` (기본): 페이지 안의 스크립트가 **그려진 높이를 재며** 나눈다
+      (:mod:`hwpxkit.paginate`). 글꼴 폭이 추정과 달라도 넘치거나 박스가
+      깨지지 않는다. PDF·PNG 는 이것으로 찍는다.
+    - ``"engine"``: 아래 파이썬 추정 그대로 그린다 (예전 동작, 비교용).
+
+    반환 dict 의 ``pages`` 는 어느 쪽이든 **파이썬 추정**(한/글 쪽 수 흉내)이다 —
+    verify·lint·gapfit 이 쓰는 값이라 바꾸지 않았다.
+
     반환 dict: pages, warnings, body_width, body_height,
+    page_fill(쪽마다 본문 높이 중 쓴 비율, 0~1 — verify 의 쪽수·빈 공간 검사),
+    forced_breaks(강제 쪽 나눔으로 끝난 쪽 번호 — 그 빈칸은 의도한 것),
     pictures(사진별 배치: page/gap_before/height/el — gapfit 이 소비),
     out 또는 html.
     """
+    if paginate not in ("browser", "engine"):
+        raise ValueError(f"paginate 는 'browser' 또는 'engine': {paginate!r}")
     src = Path(src)
     with zipfile.ZipFile(src) as z:
         sec_root = ET.fromstring(z.read("Contents/section0.xml"))
@@ -534,6 +677,9 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
     theme = _parse_theme(header_root)
     body_w, body_h, mg = _page_body(sec_root)
     word_break = _korean_word_break(header_root)
+    # CSS 의 word-break 와 줄 수 추정이 같은 기준을 써야 미리보기의 줄바꿈과
+    # 행 높이가 서로 맞는다.
+    theme.keep_words = word_break == "keep-all"
     warnings: list[str] = []
     over = sorted({int(t.find(f"{_HP}sz").get("width"))
                    for t in sec_root.iter(f"{_HP}tbl")
@@ -548,16 +694,25 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
     pages: list[list[str]] = [[]]
     y = 0
     pics_info: list[dict] = []
+    filled: list[int] = []          # 쪽마다 쓴 높이 (넘어갈 때의 y)
+    forced: set[int] = set()        # 강제 쪽 나눔으로 끝난 쪽 번호 (1부터)
 
     def new_page():
         nonlocal y
+        filled.append(y)
         pages.append([])
         y = 0
 
     for b in _blocks(sec_root, theme, body_w, imgs):
+        # 강제 쪽 나눔. 한/글은 지키는데 예전 추정은 무시해서, 쪽 나눔이 있는
+        # 문서의 쪽 수를 적게 셌다. 그 쪽의 아래 빈칸은 의도한 것이다.
+        if b.brk and pages[-1]:
+            forced.add(len(pages))
+            new_page()
         if b.kind == "text":
             body, align, pt = _runs_to_html(b.el, theme)
-            frag = (f'<div style="text-align:{align};line-height:{LINE_RATIO}">'
+            frag = (f'<div style="text-align:{align};font-size:{pt}pt;'
+                    f'line-height:{_ratio(b.el, theme)}">'
                     f'{body or "&nbsp;"}</div>')
             if y + b.height + SAFETY > body_h and b.height <= body_h and pages[-1]:
                 new_page()
@@ -624,6 +779,15 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
                                 ch += blocks_[j][0]
                                 chunk.append(blocks_[j][1])
                                 j += 1
+                            # 고아 제목 방지: 쪽이 한 줄짜리 글("가. 개발환경")에서
+                            # 끝나고 바로 뒤가 통째로 넘어가는 표·그림이면, 그
+                            # 제목도 함께 다음 쪽으로 — 제목만 쪽 끝에 남는다.
+                            if (j < len(blocks_) and len(chunk) > 1
+                                    and blocks_[j - 1][2] == "text"
+                                    and blocks_[j][2] in ("table", "pic")):
+                                j -= 1
+                                ch -= blocks_[j][0]
+                                chunk.pop()
                             pos_ = ("only" if frag_i == 0 and j >= len(blocks_) else
                                     "first" if frag_i == 0 else
                                     "last" if j >= len(blocks_) else "mid")
@@ -659,13 +823,25 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
             f'<div class="page"><div class="body">{"".join(frags)}</div>'
             f'<div class="pageno">- {n} -</div></div>')
 
+    if paginate == "browser":
+        from .paginate import PAGINATE_JS, flow_items
+        items = flow_items(sec_root, theme, imgs, body_w, body_h)
+        content = (
+            '<template id="page-tpl"><div class="page"><div class="body"></div>'
+            '<div class="pageno"></div></div></template>'
+            f'<div id="flow" style="position:absolute;left:-9999px;top:0;'
+            f'width:{_px(body_w)}">{"".join(items)}</div>'
+            f'<script>{PAGINATE_JS}</script>')
+    else:
+        content = "".join(doc_pages) + f"<script>{_FIT_SCRIPT}</script>"
+
     warn_html = "".join(
         f'<div class="warnbar" style="max-width:840px;margin:0 auto 12px;padding:8px 14px;'
         f'background:#7a1f1f;color:#ffdddd;font-size:13px;border-radius:4px">'
         f'⚠ {html.escape(w)}</div>' for w in warnings)
     html_doc = f"""<!doctype html>
 <meta charset="utf-8">
-<title>{html.escape(src.stem)} — hwpx preview</title>
+<title>{html.escape(src.stem)}</title>
 <style>
   body {{ background:#525659; margin:0; padding:24px 0;
          font-family:'함초롬바탕','Hancom Gothic','Malgun Gothic',Batang,serif;
@@ -676,12 +852,14 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
            padding:{_px(mg["top"] + mg["header"])} {_px(mg["right"])}
                    {_px(mg["bottom"] + mg["footer"])} {_px(mg["left"])};
            overflow:hidden; }}
-  .body {{ width:{_px(page_w - mg["left"] - mg["right"])}; height:100%; overflow:visible; }}
+  .body {{ width:{_px(page_w - mg["left"] - mg["right"])}; height:{_px(body_h)}; overflow:visible; }}
   .pageno {{ position:absolute; bottom:{_px(mg["footer"])}; left:0; right:0;
              text-align:center; font-size:9pt; color:#888; }}
   mark {{ padding:0; }}
   td > div {{ line-height:{LINE_RATIO}; }}
   table {{ margin:0 auto; }}
+  /* 칸을 꽉 채운 중첩 표 + 박스 조각의 안쪽 여백 = 박스 밖으로 삐져나옴 → 박스 폭에 맞춘다 */
+  .pc > table.st, td > table {{ max-width:100%; }}
   @media print {{
     body {{ background:#fff; padding:0; }}
     .page {{ box-shadow:none; margin:0; page-break-after:always; }}
@@ -689,15 +867,18 @@ def render_html(src: str | Path, out: str | Path | None = None) -> dict:
   }}
   @page {{ size:{_px(page_w)} {_px(page_h)}; margin:0; }}
 </style>
-{warn_html}{"".join(doc_pages)}
+{warn_html}{content}
 """
     # 한/글이 아직 조판한 적 없는 문단 수. 0 이면 쪽 수는 한/글이 계산한
     # 선언 높이만 쓴 것이고, 0 보다 크면 그만큼은 우리가 직접 잰 값이다.
     measured = sum(1 for p_ in sec_root.iter(f"{_HP}p") if not _is_cached(p_))
+    fill = [round(min(h, body_h) / body_h, 3) for h in filled + [y]]
     result = {"pages": len(pages), "warnings": warnings,
               "body_width": body_w, "body_height": body_h,
               "empty_pages": sum(1 for fr in pages if not fr),
               "measured": measured,
+              "page_fill": fill,
+              "forced_breaks": sorted(forced),
               "pictures": pics_info}
     if out is None:
         result["html"] = html_doc
@@ -736,7 +917,8 @@ def render_png(src: str | Path, out_png: str | Path, *, scale: float = 1.0) -> d
         page = next(sec_root.iter(f"{_HP}pagePr"))
         page_h_px = int(int(page.get("height")) * PX) + 16
         page_w_px = int(int(page.get("width")) * PX)
-        total_h = 48 + info["pages"] * page_h_px + (60 if info["warnings"] else 0)
+        # 쪽은 브라우저가 실측으로 나누므로 추정보다 늘 수 있다 — 두 쪽 여유.
+        total_h = 48 + (info["pages"] + 2) * page_h_px + (60 if info["warnings"] else 0)
         width = max(page_w_px + 80, 900)
         out_png = Path(out_png).resolve()
         out_png.parent.mkdir(parents=True, exist_ok=True)
@@ -812,6 +994,9 @@ def render_pdf(src: str | Path, out_pdf: str | Path) -> dict:
             raise RuntimeError("Chrome PDF 인쇄 실패: "
                                + r.stderr.decode("utf-8", "replace")[:200])
         info["pdf"] = str(out_pdf)
+        # 실제로 찍힌 쪽 수 — 쪽은 브라우저가 실측으로 나누므로 info["pages"]
+        # (파이썬 추정, 한/글 흉내)와 다를 수 있다.
+        info["pdf_pages"] = len(re.findall(rb"/Type\s*/Page(?!s)", out_pdf.read_bytes()))
         return info
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
