@@ -153,6 +153,17 @@ def test_human_choices() -> None:
     sents = _sentences('(위원회는 "중립적인 지문"을 고른다. 고르는 순간 중립은 끝났다.) 샌델이 포착한 것이다.')
     check("닫는 괄호 뒤에서도 문장을 가른다", len(sents) == 3 and sents[1].endswith("끝났다.)"),
           str(sents))
+    kinds = lambda t: [f.kind for f in review_text(t)]
+    check("메타 문장을 잡는다",
+          kinds("본 사업은 반려묘 알레르기 완화를 목적으로 합니다.").count("meta") == 1
+          and kinds("이 보고서는 선행 특허 12건을 다룹니다.").count("meta") == 1
+          and kinds("샌델이 포착한 것이 바로 이 지점이다.").count("meta") == 1)
+    check("내용을 싣는 문장은 메타가 아니다",
+          "meta" not in kinds("이 보고서는 Fel d1 저감 스프레이 3종의 효과를 비교합니다."))
+    check("3차 출처를 잡는다",
+          "source-tier" in kinds("[그림 2] 털 표면 구조 (출처: 나무위키)")
+          and "source-tier" not in kinds("[그림 1] 보호자 후기 블로그 글 (출처: 네이버 블로그)")
+          and "source-tier" not in kinds("[그림 2] 털 표면 (출처: Satyaraj et al., Allergy 2019)"))
 
 
 def test_mode_and_register() -> None:

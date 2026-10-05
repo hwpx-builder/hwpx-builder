@@ -144,6 +144,24 @@ EDIT_TRACES = re.compile(
     r"|\(\s*\d{4}[-.]\s?\d{1,2}[-.]\s?\d{1,2}\.?\s*(확인|기준 확인|수정)\s*\)"
     r"|(사용자|요청자)\s*요청(에 따라|으로)|←")
 
+#: 글이 글 자신을 가리키는 문장 — 내용이 멈춘다. 지우면 다음 문장이 그 자리를 받는다.
+#: "이 보고서는 …를 비교합니다"처럼 내용을 싣는 문장은 걸리지 않는다(약한 동사만 본다).
+_META_SELF = re.compile(r"^(이|본)\s*(글|보고서|발표|문서|계획서|장|절)(은|는|에서는)\s")
+_META_WEAK = re.compile(r"(다룬|다룹|살펴본|살펴봅|정리한|정리합|소개한|소개합|논의한|논의합"
+                        r"|서술한|서술합|알아본|알아봅)")
+_META = re.compile(r"(살펴|알아)보(자|겠다|겠습니다|고자)|(바로\s*)?이\s*지점(이다|입니다)"
+                   r"|이것이\s*(바로\s*)?(핵심|요점)(이다|입니다)|(을|를)\s*목적으로\s*(한다|합니다)")
+#: 판정 딱지. 바로 앞에 구체 사례가 있으면 괜찮고, 없으면 강조어가 판정을 대신한다.
+VERDICT_TAGS = ("놀랍게도", "흥미롭게도", "주목할 것은", "주목할 점은", "핵심은",
+                "가장 중요한 것은", "결정적으로")
+
+#: 3차 자료(위키, 블로그)를 출처로 단 것. 대개 한 층 위(리뷰 논문, 원 논문, 기관 자료)에
+#: 같은 내용이 있다. 블로그 화면 자체를 보여 주는 그림이면 그 블로그가 1차라 괜찮다.
+_SOURCE = re.compile(r"출처\s*[:：]\s*([^)\n]+)")
+_TERTIARY = re.compile(r"위키|wiki|namu|블로그|blog|tistory|brunch|velog|지식인|kin\.naver",
+                       re.I)
+_TIER_OK = re.compile(r"3차|캡처|화면|게시글|블로그 글|위키 문서")
+
 #: 사람이 한글 문서에 손으로 치지 않는 문장부호. 생성된 글의 가장 흔한 표지다.
 #: 받는 사람(심사자·교수)이 실제로 지적했다: 줄표 대신 '-', 가운뎃점 대신 '/'.
 _TYPO_DASH = re.compile(r"[—―]")
@@ -286,7 +304,8 @@ class Finding:
     kind: str          # cliche | hedge | translationese | connector | claim | intensifier
                        # | long | monotone | triple | no-figure | no-bold | no-highlight
                        # | over-emphasis | too-many-highlights | typography | bold-id
-                       # | register | overclaim | edit-trace
+                       # | register | overclaim | edit-trace | meta | verdict-tag
+                       # | contrast | source-tier
     severity: str      # "fix" 는 고치고 다시 검토, "note" 는 읽고 판단
     where: str         # 칸 경로 또는 호출자가 준 이름
     text: str          # 걸린 조각
@@ -431,6 +450,17 @@ def review_text(markup: str, *, where: str = "", emphasis: bool = True,
     for m in EDIT_TRACES.finditer(plain):
         add("edit-trace", "fix", around(m, 10),
             "편집 흔적 — 받는 사람에게는 소음이다. 지운다")
+    for line in plain.split("\n"):
+        m = _SOURCE.search(line)
+        if m and _TERTIARY.search(m.group(1)) and not _TIER_OK.search(line):
+            add("source-tier", "fix", m.group(0)[:40],
+                "3차 자료 — 같은 내용을 리뷰 논문/원 논문/기관 자료에서 찾아 바꾼다. "
+                "못 찾으면 출처에 '(3차 자료)'를 붙인다")
+    for sent in _sentences(plain):
+        s = sent.strip()
+        if _META.search(s) or (_META_SELF.search(s) and _META_WEAK.search(s)):
+            add("meta", "fix", s[:40] + ("…" if len(s) > 40 else ""),
+                "글이 글을 가리키는 문장 — 지우고 다음 문장이 결론을 바로 말하게 한다")
     if reg:
         for sent in _sentences(plain):
             got = sentence_register(sent) if len(_plain(sent).strip()) >= 6 else None
@@ -478,6 +508,13 @@ def review_text(markup: str, *, where: str = "", emphasis: bool = True,
     for w in INTENSIFIERS:
         if w in plain:
             add("intensifier", "note", w, "정도를 숫자로")
+    for w in VERDICT_TAGS:
+        if w in plain:
+            add("verdict-tag", "note", w,
+                "바로 앞에 구체 사례가 없으면 딱지다 — 지우고 사실이 판정을 대신하게")
+    if plain.count("아니라") >= 2:
+        add("contrast", "note", f"'아니라' ×{plain.count('아니라')}",
+            "'A가 아니라 B'가 반복되면 문체가 된다 — 빠진 것을 직접 이름 붙여 쓴다")
 
     if not prose_like:
         return out
