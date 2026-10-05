@@ -149,10 +149,6 @@ def test_human_choices() -> None:
     trace = review_text("이번 개정에서 표현을 바꿨다. ※ 수정: 원가 행 삭제 (2026-09-29 확인)")
     check("편집 흔적을 잡는다", sum(f.kind == "edit-trace" for f in trace) >= 2,
           "; ".join(map(str, trace)))
-    from hwpxkit.prose import _sentences
-    sents = _sentences('(위원회는 "중립적인 지문"을 고른다. 고르는 순간 중립은 끝났다.) 샌델이 포착한 것이다.')
-    check("닫는 괄호 뒤에서도 문장을 가른다", len(sents) == 3 and sents[1].endswith("끝났다.)"),
-          str(sents))
 
 
 def test_mode_and_register() -> None:

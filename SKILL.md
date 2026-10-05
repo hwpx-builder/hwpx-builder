@@ -95,16 +95,6 @@ reader where to look**. `hwpxkit.prose` catches the mechanical part; the rest is
 a re-read from the reviewer's seat. The full procedure and the style table are in
 `references/writing.md`. Do not skip it.
 
-Before 0. **Sketch first, ask second.** Do not open with questions. From the form,
-   the folder's `project.md` and what the user said, write down your guesses and let
-   the user strike the wrong ones: who reads this and **what it is laid next to**
-   (nine other applications? one professor's desk?); what the instruction asks
-   (fill the cell), what it is for (a cell that fits the form), and what it is
-   *really* for (a reason to pick this applicant over the others); and the gap
-   between the problem the user names ("did I fill the form right?") and the one
-   you infer ("does it win the comparison?"). One block, hypotheses only, then
-   proceed on what survives. An open question ("which register?") makes the user
-   write; a guess makes them strike a word.
 0. **Decide the document kind and the register before writing a line**, and pass
    them to every review call:
    - `mode="pitch"` (지원서·사업계획서, default) — state what you checked; hedged
@@ -119,19 +109,7 @@ Before 0. **Sketch first, ask second.** Do not open with questions. From the for
      takes the majority register of the draft and flags the rest.
 1. **Draft the content in a Python structure first** (dict/list of the
    `container_box` blocks), not inline in builder calls — you cannot review what
-   you cannot iterate over. Before each cell, three moves, inwardly:
-   - **Facts before sentences.** List what the cell can truthfully say — claim,
-     figure, what it is compared against, source, who/when. A claim with no row
-     here is not written, or is written as `(근거 미기재)`. Clichés come from
-     writing a cell that has no facts; this is where they are prevented, not in
-     step 2.
-   - **Two vending-machine rows.** Say the most probable sentence for this cell,
-     then the second most probable. The first is the cliché ("다양한 분야에서
-     효과적으로"), the second is its substitute ("여러 분야에서 유의미하게"). Write
-     from outside both. The checker in step 2 only catches the first row.
-   - **Cold water first.** The thing in the palm, then the name: the figure, the
-     institution, the date arrive before any adjective about them. Leave the
-     adjective ("혁신적", "큰 성과") for the reviewer to supply.
+   you cannot iterate over.
 2. **`review_blocks(content, mode=…, register=…)`** → fix until it reports no
    `FIX`. Each finding carries the direction (`'다양한' — 무엇이 몇 가지인지 쓴다`).
    Deleting is a fix.
@@ -144,21 +122,7 @@ Before 0. **Sketch first, ask second.** Do not open with questions. From the for
 5. **`python -m hwpxkit.prose out.hwpx --dump`** — read the plain text from the
    reviewer's seat with the question table in `references/writing.md`
    (first sentence = the conclusion? bold alone readable? one highlight = the
-   thing to remember?). Then the **sentence-relation pass** (`references/writing.md`
-   → "문장 사이의 관계"): these are judged, never pattern-matched, because each has
-   a permitted form that only reading can tell apart — a meta sentence ("이 글은",
-   "바로 이 지점이다") vs. the next sentence carrying the verdict; a verdict tag
-   ("놀랍게도", "핵심은") vs. a verdict paid for by a concrete case right before it;
-   "A가 아니라 B" in the author's voice (≤3 per document) vs. in a quoted voice;
-   a clipped full stop that halts vs. one that picks up the previous noun; an
-   equal-weight "A다. B다." vs. a second clause that eats the first. Move the
-   sentence to its permitted form or cut it. Fix, go to 2.
-   - For an academic text (발표문·발제문·에세이, read by a professor) this pass is
-     the main review and the machine checks are secondary: run `verify(path,
-     prose=False)` (the emphasis and figure rules are for applications) and use
-     `review_text` only for typography, edit traces and register. Every quoted
-     term you keep must be one you can explain if asked — the professor asked
-     what "지양" meant and the author could not answer.
+   thing to remember?). Fix, go to 2.
 6. Render a PNG and skim **only** the bold and highlighted text. If that skim does
    not say what the business is, why now, and how big — the emphasis is in the
    wrong places.
@@ -211,16 +175,6 @@ What the user has asked for, every time it came up:
 - **Clean around the picture.** When a figure is "난잡", the photo was usually fine
   and the decoration around it was not: white/black, minimal text, no callouts.
 - **Never invent an image** (rule 4). No real picture → `image_placeholder()`.
-- **Ask every borrowed thing its tier** — figures, table rows and pasted
-  explanations alike. Primary (paper, patent, filing, statistics office), secondary
-  (article, industry report), tertiary (wiki, blog). What you found on a wiki
-  usually exists one tier up — the review paper, the Stanford Encyclopedia entry,
-  the examiner's guideline — and climbing costs a few searches; submitting from
-  the tertiary tier costs the paragraph's credibility when the professor asks
-  "where did you see this?". If you cannot climb, name the tier in the source
-  line. Page numbers only after checking the original; otherwise `[ ]` and ask.
-  A re-quotation needs its signal in the sentence ("샌델에 따르면", "샌델이 소개하는
-  로티는") — without it the reader reads plagiarism.
 
 ```python
 b.figure("fig/hair_sem.png", width_mm=110,
